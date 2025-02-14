@@ -3105,34 +3105,32 @@ func (s *server) DeleteUser() http.HandlerFunc {
 
 func (s *server) DeleteUserByToken() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Token string `json:"token"`
-		}
 
-		// Decodifica o JSON do corpo da requisição
-		err := json.NewDecoder(r.Body).Decode(&request)
-		if err != nil || request.Token == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Invalid or missing token"))
+		// Pegar o token do parâmetro da URL
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Token is required"))
 			return
 		}
 
-		// Exclui o usuário pelo token
-		result, err := s.db.Exec("DELETE FROM users WHERE token = ?", request.Token)
+		// Excluir o usuário do banco de dados com base no token
+		result, err := s.db.Exec("DELETE FROM users WHERE token = ?", token)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			return
 		}
 
-		// Verifica se o usuário foi excluído
+		// Verificar se o usuário foi deletado
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
 			s.Respond(w, r, http.StatusNotFound, errors.New("User not found"))
 			return
 		}
 
-		// Responde com sucesso
+		// Retornar resposta de sucesso
 		response := map[string]interface{}{"Details": "User deleted successfully"}
 		responseJson, err := json.Marshal(response)
+
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 		} else {

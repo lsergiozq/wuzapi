@@ -1,8 +1,6 @@
 package main
 
 import (
-	"log"
-
 	"github.com/streadway/amqp"
 )
 
@@ -16,12 +14,12 @@ type RabbitMQQueue struct {
 func NewRabbitMQQueue(amqpURL string, queueName string) *RabbitMQQueue {
 	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
-		log.Fatal("Falha ao conectar ao RabbitMQ:", err)
+		log.Error().Msg("Falha ao conectar ao RabbitMQ:" + err.Error())
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Fatal("Falha ao abrir um canal:", err)
+		log.Error().Msg("Falha ao abrir um canal:" + err.Error())
 	}
 
 	q, err := ch.QueueDeclare(
@@ -33,7 +31,7 @@ func NewRabbitMQQueue(amqpURL string, queueName string) *RabbitMQQueue {
 		amqp.Table{"x-max-priority": 10}, // Habilita prioridade
 	)
 	if err != nil {
-		log.Fatal("Falha ao declarar a fila:", err)
+		log.Error().Msg("Falha ao declarar a fila:" + err.Error())
 	}
 
 	return &RabbitMQQueue{

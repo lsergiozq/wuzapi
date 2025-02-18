@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -12,7 +11,7 @@ import (
 func processQueue(queue *RabbitMQQueue) {
 	msgs, err := queue.Dequeue()
 	if err != nil {
-		log.Fatal("Erro ao consumir mensagens:", err)
+		log.Error().Msg("Erro ao consumir mensagens:")
 	}
 
 	for msg := range msgs {

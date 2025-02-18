@@ -1628,8 +1628,72 @@ func (s *server) SendList() http.HandlerFunc {
 	}
 }
 
-// Sends a regular text message
 func (s *server) SendMessage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		userid, _ := strconv.Atoi(txtid)
+
+		if clientPointer[userid] == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
+			return
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		var t struct {
+			Phone    string
+			Body     string
+			Id       string
+			Priority int // Adicionando prioridade no payload
+		}
+
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone obrigatório"))
+			return
+		}
+
+		if t.Body == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("O corpo da mensagem não pode estar vazio"))
+			return
+		}
+
+		// Criando fila Redis
+		queue := NewRedisQueue("172.30.245.133:6379", "WuzAPI Messages Queue")
+
+		// Criando um ID para a mensagem, caso não tenha sido fornecido
+		if t.Id == "" {
+			t.Id = whatsmeow.GenerateMessageID()
+		}
+
+		// Criando uma string JSON para a mensagem na fila
+		msgData, _ := json.Marshal(map[string]string{
+			"Id":    t.Id,
+			"Phone": t.Phone,
+			"Body":  t.Body,
+		})
+
+		// Adiciona a mensagem na fila do Redis com prioridade
+		queue.Enqueue(string(msgData), t.Priority)
+
+		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
+
+		response := map[string]interface{}{"Details": "Mensagem enfileirada", "Id": t.Id}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
+// Sends a regular text message
+func (s *server) SendMessageOLD() http.HandlerFunc {
 
 	type textStruct struct {
 		Phone       string

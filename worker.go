@@ -3,31 +3,29 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"time"
+	"log"
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 )
 
-func processQueue(queue *RedisQueue) {
-	for {
-		// Pega a mensagem com maior prioridade
-		msgData, err := queue.Dequeue()
-		if err != nil || msgData == "" {
-			time.Sleep(1 * time.Second) // Evita consumo excessivo de CPU
-			continue
-		}
+func processQueue(queue *RabbitMQQueue) {
+	msgs, err := queue.Dequeue()
+	if err != nil {
+		log.Fatal("Erro ao consumir mensagens:", err)
+	}
 
+	for msg := range msgs {
 		// Decodifica a mensagem JSON
-		var msg map[string]string
-		if err := json.Unmarshal([]byte(msgData), &msg); err != nil {
+		var msgData map[string]string
+		if err := json.Unmarshal(msg.Body, &msgData); err != nil {
 			log.Println("Erro ao decodificar mensagem:", err)
 			continue
 		}
 
-		phone := msg["Phone"]
-		body := msg["Body"]
-		id := msg["Id"]
+		phone := msgData["Phone"]
+		body := msgData["Body"]
+		id := msgData["Id"]
 
 		// Recupera o usuário correto
 		userid := 0
@@ -39,11 +37,11 @@ func processQueue(queue *RedisQueue) {
 		}
 
 		if userid == 0 {
-			log.Println("Nenhuma sessão do WhatsApp ativa")
+			log.Println("Nenhuma sessão ativa no WhatsApp")
 			continue
 		}
 
-		// Criando a mensagem para envio
+		// Criando e enviando a mensagem
 		recipient, ok := parseJID(phone)
 		if !ok {
 			log.Println("Erro ao converter telefone para JID")
@@ -56,7 +54,6 @@ func processQueue(queue *RedisQueue) {
 			},
 		}
 
-		// Envio da mensagem
 		resp, err := clientPointer[userid].SendMessage(context.Background(), recipient, msgProto, whatsmeow.SendRequestExtra{ID: id})
 		if err != nil {
 			log.Println("Erro ao enviar mensagem:", err)

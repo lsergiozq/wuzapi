@@ -1662,8 +1662,8 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		// Criando fila Redis
-		queue := NewRedisQueue("172.30.245.133:6379", "WuzAPI Messages Queue")
+		rabbitMQURL := getRabbitMQURL()
+		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
 		// Criando um ID para a mensagem, caso não tenha sido fornecido
 		if t.Id == "" {
@@ -1678,7 +1678,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		})
 
 		// Adiciona a mensagem na fila do Redis com prioridade
-		queue.Enqueue(string(msgData), t.Priority)
+		queue.Enqueue(string(msgData), uint8(t.Priority))
 
 		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
 

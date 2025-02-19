@@ -35,7 +35,7 @@ func (s *server) routes() {
 	adminRoutes.Handle("/users/{id}", s.DeleteUser()).Methods("DELETE")
 	adminRoutes.Handle("/users", s.DeleteUserByToken()).Methods("DELETE")
 	//criar rota para atualizar o usuário, iremos atualizar uma imagem de perfil, que seria a logomarca da empresa
-	adminRoutes.Handle("/users/image", s.UpdateUserImage()).Methods("POST")
+	adminRoutes.Handle("/users/image/{token}", s.UpdateUserImage()).Methods("POST")
 
 	c := alice.New()
 	c = c.Append(s.authalice)

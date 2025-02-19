@@ -88,7 +88,7 @@ func main() {
 	}
 	defer db.Close()
 
-	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All");`
+	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All", imagebase64 TEXT NOT NULL DEFAULT);`
 	_, err = db.Exec(sqlStmt)
 	if err != nil {
 		panic(fmt.Sprintf("%q: %s\n", err, sqlStmt))
@@ -102,6 +102,11 @@ func main() {
 	}
 	if err != nil {
 		panic(err)
+	}
+
+	_, err = db.Exec(`ALTER TABLE users ADD COLUMN imagebase64 TEXT NOT NULL DEFAULT ""`)
+	if err != nil {
+		log.Warn().Err(err).Msg("A coluna imagebase64 pode já existir ou falha ao adicionar")
 	}
 
 	s := &server{
@@ -146,7 +151,7 @@ func main() {
 	queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
 	log.Println("Worker de mensagens iniciado com RabbitMQ...")
-	go processQueue(queue)
+	go processQueue(queue, s)
 
 	<-done
 	log.Info().Msg("Server Stoped")

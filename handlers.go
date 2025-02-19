@@ -56,6 +56,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		webhook := ""
 		jid := ""
 		events := ""
+		imagebase64 := ""
 
 		// Get token from headers or uri parameters
 		token := r.Header.Get("token")
@@ -67,25 +68,26 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,webhook,jid,events FROM users WHERE token=? LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			for rows.Next() {
-				err = rows.Scan(&txtid, &webhook, &jid, &events)
+				err = rows.Scan(&txtid, &webhook, &jid, &events, &imagebase64)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
 				}
 				userid, _ = strconv.Atoi(txtid)
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Events":  events,
+					"Id":          txtid,
+					"Jid":         jid,
+					"Webhook":     webhook,
+					"Token":       token,
+					"Events":      events,
+					"ImageBase64": imagebase64,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -114,6 +116,7 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 		webhook := ""
 		jid := ""
 		events := ""
+		imagebase64 := ""
 
 		// Get token from headers or uri parameters
 		token := r.Header.Get("token")
@@ -125,25 +128,26 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,webhook,jid,events FROM users WHERE token=? LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			for rows.Next() {
-				err = rows.Scan(&txtid, &webhook, &jid, &events)
+				err = rows.Scan(&txtid, &webhook, &jid, &events, &imagebase64)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
 				}
 				userid, _ = strconv.Atoi(txtid)
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Events":  events,
+					"Id":          txtid,
+					"Jid":         jid,
+					"Webhook":     webhook,
+					"Token":       token,
+					"Events":      events,
+					"ImageBase64": imagebase64,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -176,6 +180,7 @@ func (s *server) Connect() http.HandlerFunc {
 		jid := r.Context().Value("userinfo").(Values).Get("Jid")
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		token := r.Context().Value("userinfo").(Values).Get("Token")
+
 		userid, _ := strconv.Atoi(txtid)
 		eventstring := ""
 
@@ -802,8 +807,78 @@ func (s *server) SendAudio() http.HandlerFunc {
 	}
 }
 
-// Sends an Image message
 func (s *server) SendImage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		userid, _ := strconv.Atoi(txtid)
+
+		if clientPointer[userid] == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
+			return
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		var t struct {
+			Phone    string
+			Image    string
+			Caption  string
+			Id       string
+			Priority int // Adicionando prioridade no payload
+		}
+
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone obrigatório"))
+			return
+		}
+
+		// Se não houver imagem na mensagem, busca a logomarca do usuário
+		if t.Image == "" {
+			//obtem a imagem que está no Context userinfo chamada ImageBase64
+			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
+
+			t.Image = imageBase64
+		}
+
+		rabbitMQURL := getRabbitMQURL()
+		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+
+		// Criando um ID para a mensagem, caso não tenha sido fornecido
+		if t.Id == "" {
+			t.Id = whatsmeow.GenerateMessageID()
+		}
+
+		// Criando uma string JSON para a mensagem na fila
+		msgData, _ := json.Marshal(map[string]string{
+			"Id":      t.Id,
+			"Phone":   t.Phone,
+			"Image":   t.Image,
+			"Caption": t.Caption,
+		})
+
+		// Adiciona a mensagem na fila do RabbitMQ com prioridade
+		queue.Enqueue(string(msgData), uint8(t.Priority))
+
+		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
+
+		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": t.Id}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
+// Sends an Image message
+func (s *server) SendImageOLD() http.HandlerFunc {
 
 	type imageStruct struct {
 		Phone       string
@@ -3079,15 +3154,17 @@ func (s *server) AddUser() http.HandlerFunc {
 
 		// Parse the request body
 		var user struct {
-			Name       string `json:"name"`
-			Token      string `json:"token"`
-			Webhook    string `json:"webhook"`
-			Expiration int    `json:"expiration"`
-			Events     string `json:"events"`
+			Name        string `json:"name"`
+			Token       string `json:"token"`
+			Webhook     string `json:"webhook"`
+			Expiration  int    `json:"expiration"`
+			Events      string `json:"events"`
+			ImageBase64 string `json:"imagebase64"`
 		}
+
 		err := json.NewDecoder(r.Body).Decode(&user)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Incomplete data in Payload. Required name,token,webhook,expiration,events"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Incomplete data in Payload. Required name,token,webhook,expiration,events, imagebase64"))
 			return
 		}
 
@@ -3115,8 +3192,8 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 
 		// Insert the user into the database
-		result, err := s.db.Exec("INSERT INTO users (name, token, webhook, expiration, events, jid, qrcode) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "")
+		result, err := s.db.Exec("INSERT INTO users (name, token, webhook, expiration, events, imagebase64, jid, qrcode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			user.Name, user.Token, user.Webhook, user.Expiration, user.Events, user.ImageBase64, "", "")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("Admin DB Error")
@@ -3164,6 +3241,50 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
+	}
+}
+
+func (s *server) UpdateUserImage() http.HandlerFunc {
+	type updateImageStruct struct {
+		ImageBase64 string `json:"imagebase64"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Obtém o token da URL
+		vars := mux.Vars(r)
+		token := vars["token"]
+
+		if token == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Token é obrigatório na URL"))
+			return
+		}
+
+		var requestData updateImageStruct
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(&requestData)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar JSON"))
+			return
+		}
+
+		// Atualiza a imagem no banco de dados pelo token
+		result, err := s.db.Exec("UPDATE users SET imagebase64 = ? WHERE token = ?", requestData.ImageBase64, token)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Falha ao atualizar a imagem do usuário"))
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			s.Respond(w, r, http.StatusNotFound, errors.New("Usuário não encontrado ou token inválido"))
+			return
+		}
+
+		log.Info().Str("token", token).Msg("Imagem do usuário atualizada com sucesso")
+		response := map[string]interface{}{"message": "Imagem atualizada com sucesso"}
+		responseJson, _ := json.Marshal(response)
+
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 

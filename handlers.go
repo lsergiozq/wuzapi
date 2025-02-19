@@ -810,8 +810,8 @@ func (s *server) SendAudio() http.HandlerFunc {
 func (s *server) SendImage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
 		userid, _ := strconv.Atoi(txtid)
+		msgid := ""
 
 		if clientPointer[userid] == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
@@ -820,11 +820,12 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		decoder := json.NewDecoder(r.Body)
 		var t struct {
-			Phone    string
-			Image    string
-			Caption  string
-			Id       string
-			Priority int // Adicionando prioridade no payload
+			Phone       string
+			Image       string
+			Caption     string
+			Id          string
+			Priority    int
+			ContextInfo waProto.ContextInfo
 		}
 
 		err := decoder.Decode(&t)
@@ -838,36 +839,118 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		// Se não houver imagem na mensagem, busca a logomarca do usuário
 		if t.Image == "" {
-			//obtem a imagem que está no Context userinfo chamada ImageBase64
 			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
-
 			t.Image = imageBase64
 		}
 
+		if t.Image == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
+			return
+		}
+
+		if t.Id == "" {
+			msgid = whatsmeow.GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		var uploaded whatsmeow.UploadResponse
+		var filedata []byte
+		var thumbnailBytes []byte
+
+		if strings.HasPrefix(t.Image, "data:image") {
+			dataURL, err := dataurl.DecodeString(t.Image)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar a imagem base64"))
+				return
+			}
+
+			filedata = dataURL.Data
+			uploaded, err = clientPointer[userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao fazer upload da imagem"))
+				return
+			}
+
+			reader := bytes.NewReader(filedata)
+			img, _, err := image.Decode(reader)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao processar thumbnail"))
+				return
+			}
+
+			thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+			tmpFile, err := os.CreateTemp("", "thumbnail-*.jpg")
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao criar arquivo temporário para thumbnail"))
+				return
+			}
+			defer os.Remove(tmpFile.Name())
+
+			if err := jpeg.Encode(tmpFile, thumbnail, nil); err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao codificar thumbnail em JPEG"))
+				return
+			}
+
+			thumbnailBytes, err = os.ReadFile(tmpFile.Name())
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao ler arquivo de thumbnail"))
+				return
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Formato de imagem inválido"))
+			return
+		}
+
+		msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{
+			Caption:       proto.String(t.Caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(http.DetectContentType(filedata)),
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(filedata))),
+			JPEGThumbnail: thumbnailBytes,
+		}}
+
+		if t.ContextInfo.StanzaID != nil {
+			msg.ImageMessage.ContextInfo = &waProto.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			}
+		}
+
+		if t.ContextInfo.MentionedJID != nil {
+			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		}
+
+		// Enfileirar no RabbitMQ
 		rabbitMQURL := getRabbitMQURL()
 		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
-		// Criando um ID para a mensagem, caso não tenha sido fornecido
-		if t.Id == "" {
-			t.Id = whatsmeow.GenerateMessageID()
-		}
-
-		// Criando uma string JSON para a mensagem na fila
-		msgData, _ := json.Marshal(map[string]string{
-			"Id":      t.Id,
-			"Phone":   t.Phone,
-			"Image":   t.Image,
-			"Caption": t.Caption,
+		msgData, _ := json.Marshal(map[string]interface{}{
+			"Id":            msgid,
+			"Phone":         t.Phone,
+			"Caption":       t.Caption,
+			"URL":           uploaded.URL,
+			"DirectPath":    uploaded.DirectPath,
+			"MediaKey":      uploaded.MediaKey,
+			"Mimetype":      http.DetectContentType(filedata),
+			"FileEncSHA256": uploaded.FileEncSHA256,
+			"FileSHA256":    uploaded.FileSHA256,
+			"FileLength":    len(filedata),
+			"Thumbnail":     thumbnailBytes,
 		})
 
-		// Adiciona a mensagem na fila do RabbitMQ com prioridade
 		queue.Enqueue(string(msgData), uint8(t.Priority))
 
-		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
+		log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 
-		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": t.Id}
+		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)

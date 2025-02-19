@@ -13,21 +13,22 @@ import (
 func processQueue(queue *RabbitMQQueue, s *server) {
 	msgs, err := queue.Dequeue()
 	if err != nil {
-		log.Error().Msg("Erro ao consumir mensagens:")
+		log.Error().Msg("Erro ao consumir mensagens da fila: " + err.Error())
+		return
 	}
 
 	for msg := range msgs {
-		// Decodifica a mensagem JSON
-		var msgData map[string]string
-		if err := json.Unmarshal(msg.Body, &msgData); err != nil {
-			log.Error().Msg("Erro ao decodificar mensagem: " + err.Error())
-			continue
+		// Decodifica a mensagem JSON da fila
+		var msgData struct {
+			Id       string          `json:"Id"`
+			Phone    string          `json:"Phone"`
+			MsgProto json.RawMessage `json:"MsgProto"` // Armazena a mensagem como JSON bruto
 		}
 
-		phone := msgData["Phone"]
-		body := msgData["Body"]
-		image := msgData["Image"]
-		id := msgData["Id"]
+		if err := json.Unmarshal(msg.Body, &msgData); err != nil {
+			log.Error().Msg("Erro ao decodificar mensagem da fila: " + err.Error())
+			continue
+		}
 
 		// Recupera o usuário correto
 		userid := 0
@@ -43,30 +44,21 @@ func processQueue(queue *RabbitMQQueue, s *server) {
 			continue
 		}
 
-		// Criando a mensagem
-		var msgProto *waProto.Message
-		if image != "" {
-			msgProto = &waProto.Message{
-				ImageMessage: &waProto.ImageMessage{
-					Caption: &body,
-				},
-			}
-		} else {
-			msgProto = &waProto.Message{
-				ExtendedTextMessage: &waProto.ExtendedTextMessage{
-					Text: &body,
-				},
-			}
+		// Decodifica `msgProto` diretamente da fila
+		var msgProto waProto.Message
+		if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
+			log.Error().Msg("Erro ao decodificar MsgProto: " + err.Error())
+			continue
 		}
 
-		recipient, ok := parseJID(phone)
+		recipient, ok := parseJID(msgData.Phone)
 		if !ok {
 			log.Error().Msg("Erro ao converter telefone para JID")
 			continue
 		}
 
 		// Envia a mensagem e captura o resultado
-		resp, err := clientPointer[userid].SendMessage(context.Background(), recipient, msgProto, whatsmeow.SendRequestExtra{ID: id})
+		resp, err := clientPointer[userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 		// Define status e detalhes do envio
 		status := "success"
@@ -86,38 +78,40 @@ func processQueue(queue *RabbitMQQueue, s *server) {
 		if found {
 			webhookurl = myuserinfo.(Values).Get("Webhook")
 		}
-		events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
 
-		// Após o envio, verificar se o webhook deve ser chamado
-		if !Find(events, "Callback") && !Find(events, "All") {
-			log.Warn().Msg("Usuário não está inscrito para Callback. Ignorando webhook.")
-			return
-		}
-
-		// Criar estrutura de evento no mesmo formato do wmiau.go
-		postmap := make(map[string]interface{})
-		postmap["type"] = "Callback"
-		postmap["event"] = map[string]interface{}{
-			"id":        id,
-			"phone":     phone,
-			"status":    status,
-			"details":   details,
-			"timestamp": timestamp,
-		}
-
-		// Enviar para o webhook
 		if webhookurl != "" {
-			values, _ := json.Marshal(postmap)
-			data := map[string]string{
-				"jsonData": string(values),
-				"token":    myuserinfo.(Values).Get("Token"),
+			events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
+
+			// Após o envio, verificar se o webhook deve ser chamado
+			if !Find(events, "Callback") && !Find(events, "All") {
+				log.Warn().Msg("Usuário não está inscrito para Callback. Ignorando webhook.")
+			} else {
+				// Criar estrutura de evento no mesmo formato do wmiau.go
+				postmap := map[string]interface{}{
+					"type": "Callback",
+					"event": map[string]interface{}{
+						"id":        msgData.Id,
+						"phone":     msgData.Phone,
+						"status":    status,
+						"details":   details,
+						"timestamp": timestamp,
+					},
+				}
+
+				// Enviar para o webhook
+
+				values, _ := json.Marshal(postmap)
+				data := map[string]string{
+					"jsonData": string(values),
+					"token":    myuserinfo.(Values).Get("Token"),
+				}
+				go callHook(webhookurl, data, userid)
+
+				log.Info().Str("id", msgData.Id).Str("status", status).Msg("Callback processado")
 			}
-			go callHook(webhookurl, data, userid)
 		} else {
 			log.Warn().Str("userid", fmt.Sprintf("%d", userid)).Msg("Nenhum webhook configurado para este usuário")
 		}
-
-		log.Info().Str("id", id).Str("status", status).Msg("Callback processado")
 	}
 }
 

@@ -855,6 +855,12 @@ func (s *server) SendImage() http.HandlerFunc {
 			msgid = t.Id
 		}
 
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
 		var thumbnailBytes []byte
@@ -904,17 +910,19 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{
-			Caption:       proto.String(t.Caption),
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      proto.String(http.DetectContentType(filedata)),
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uint64(len(filedata))),
-			JPEGThumbnail: thumbnailBytes,
-		}}
+		msg := waProto.Message{
+			ImageMessage: &waProto.ImageMessage{
+				Caption:       proto.String(t.Caption),
+				URL:           proto.String(uploaded.URL),
+				DirectPath:    proto.String(uploaded.DirectPath),
+				MediaKey:      uploaded.MediaKey,
+				Mimetype:      proto.String(http.DetectContentType(filedata)),
+				FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256:    uploaded.FileSHA256,
+				FileLength:    proto.Uint64(uint64(len(filedata))),
+				JPEGThumbnail: thumbnailBytes,
+			},
+		}
 
 		if t.ContextInfo.StanzaID != nil {
 			msg.ImageMessage.ContextInfo = &waProto.ContextInfo{
@@ -933,17 +941,9 @@ func (s *server) SendImage() http.HandlerFunc {
 		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
 		msgData, _ := json.Marshal(map[string]interface{}{
-			"Id":            msgid,
-			"Phone":         t.Phone,
-			"Caption":       t.Caption,
-			"URL":           uploaded.URL,
-			"DirectPath":    uploaded.DirectPath,
-			"MediaKey":      uploaded.MediaKey,
-			"Mimetype":      http.DetectContentType(filedata),
-			"FileEncSHA256": uploaded.FileEncSHA256,
-			"FileSHA256":    uploaded.FileSHA256,
-			"FileLength":    len(filedata),
-			"Thumbnail":     thumbnailBytes,
+			"Id":       msgid,
+			"Phone":    t.Phone,
+			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
 		})
 
 		queue.Enqueue(string(msgData), uint8(t.Priority))

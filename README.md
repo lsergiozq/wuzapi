@@ -11,6 +11,14 @@ much less memory and CPU than those solutions. The drawback is that a change
 in the WhatsApp protocol could break connections and will require a library 
 update.
 
+## Customization of this project
+
+This project is based on WuzAPI,  
+with modifications made to meet our specific needs.  
+The main changes include improvements to the webhook structure,  
+adjustments in message processing, and other optimizations  
+for integration with our services.
+
 ## :warning: Warning
 
 **Using this software violating WhatsApp ToS can get your number banned**: 

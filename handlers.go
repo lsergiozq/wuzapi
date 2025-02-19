@@ -855,12 +855,6 @@ func (s *server) SendImage() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, err)
-			return
-		}
-
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
 		var thumbnailBytes []byte

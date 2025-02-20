@@ -1783,6 +1783,15 @@ func (s *server) SendList() http.HandlerFunc {
 }
 
 func (s *server) SendMessage() http.HandlerFunc {
+
+	type textStruct struct {
+		Phone       string
+		Body        string
+		Id          string
+		Priority    int
+		ContextInfo waProto.ContextInfo
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		userid, _ := strconv.Atoi(txtid)
@@ -1792,43 +1801,59 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
+		msgid := ""
 		decoder := json.NewDecoder(r.Body)
-		var t struct {
-			Phone    string
-			Body     string
-			Id       string
-			Priority int // Adicionando prioridade no payload
-		}
-
+		var t textStruct
 		err := decoder.Decode(&t)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar Payload"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Could not decode Payload"))
 			return
 		}
 
 		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone obrigatório"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Missing Phone in Payload"))
 			return
 		}
 
 		if t.Body == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("O corpo da mensagem não pode estar vazio"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Missing Body in Payload"))
 			return
 		}
 
 		rabbitMQURL := getRabbitMQURL()
 		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
-		// Criando um ID para a mensagem, caso não tenha sido fornecido
 		if t.Id == "" {
-			t.Id = whatsmeow.GenerateMessageID()
+			msgid = whatsmeow.GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		msg := &waProto.Message{
+			ExtendedTextMessage: &waProto.ExtendedTextMessage{
+				Text: &t.Body,
+			},
+		}
+
+		if t.ContextInfo.StanzaID != nil {
+			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			}
+		}
+		if t.ContextInfo.MentionedJID != nil {
+			if msg.ExtendedTextMessage.ContextInfo == nil {
+				msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{}
+			}
+			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
 		}
 
 		// Criando uma string JSON para a mensagem na fila
-		msgData, _ := json.Marshal(map[string]string{
-			"Id":    t.Id,
-			"Phone": t.Phone,
-			"Body":  t.Body,
+		msgData, _ := json.Marshal(map[string]interface{}{
+			"Id":       t.Id,
+			"Phone":    t.Phone,
+			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
 		})
 
 		// Adiciona a mensagem na fila do Redis com prioridade
@@ -1899,8 +1924,6 @@ func (s *server) SendMessageOLD() http.HandlerFunc {
 		} else {
 			msgid = t.Id
 		}
-
-		//	msg := &waProto.Message{Conversation: &t.Body}
 
 		msg := &waProto.Message{
 			ExtendedTextMessage: &waProto.ExtendedTextMessage{

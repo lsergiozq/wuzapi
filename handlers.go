@@ -1851,7 +1851,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 
 		// Criando uma string JSON para a mensagem na fila
 		msgData, _ := json.Marshal(map[string]interface{}{
-			"Id":       t.Id,
+			"Id":       msgid,
 			"Phone":    t.Phone,
 			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
 		})

@@ -839,11 +839,13 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
+		// Verificar se a imagem está no Payload ou no usuário
 		if t.Image == "" {
 			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
 			t.Image = imageBase64
 		}
 
+		// Caso ainda não tenha imagem, retornar erro
 		if t.Image == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
 			return
@@ -3258,7 +3260,7 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 
 		// Validate the events input
-		validEvents := []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "All"}
+		validEvents := []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "CallBack", "All"}
 		eventList := strings.Split(user.Events, ",")
 		for _, event := range eventList {
 			event = strings.TrimSpace(event)

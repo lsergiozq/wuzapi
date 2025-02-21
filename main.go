@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -86,7 +88,7 @@ func main() {
 	}
 	defer db.Close()
 
-	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All");`
+	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All", imagebase64 TEXT NOT NULL DEFAULT "");`
 	_, err = db.Exec(sqlStmt)
 	if err != nil {
 		panic(fmt.Sprintf("%q: %s\n", err, sqlStmt))
@@ -100,6 +102,11 @@ func main() {
 	}
 	if err != nil {
 		panic(err)
+	}
+
+	_, err = db.Exec(`ALTER TABLE users ADD COLUMN imagebase64 TEXT NOT NULL DEFAULT ""`)
+	if err != nil {
+		log.Warn().Err(err).Msg("A coluna imagebase64 pode já existir ou falha ao adicionar")
 	}
 
 	s := &server{
@@ -139,9 +146,12 @@ func main() {
 	//wlog.Infof("Server Started. Listening on %s:%s", *address, *port)
 	log.Info().Str("address", *address).Str("port", *port).Msg("Server Started")
 
-	queue := NewRedisQueue("172.30.245.133:6379", "WuzAPI Messages Queue")
-	log.Println("Worker de mensagens iniciado...")
-	go processQueue(queue)
+	// Conectar ao RabbitMQ
+	rabbitMQURL := getRabbitMQURL()
+	queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+
+	log.Println("Worker de mensagens iniciado com RabbitMQ...")
+	go processQueue(queue, s)
 
 	<-done
 	log.Info().Msg("Server Stoped")
@@ -158,4 +168,17 @@ func main() {
 	}
 	log.Info().Msg("Server Exited Properly")
 
+}
+
+func getRabbitMQURL() string {
+	err := godotenv.Load()
+	if err != nil {
+		log.Error().Msg("Erro ao carregar .env")
+	}
+
+	url := os.Getenv("RABBITMQ_URL")
+	if url == "" {
+		log.Error().Msg("RABBITMQ_URL não definida")
+	}
+	return url
 }

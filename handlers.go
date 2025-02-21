@@ -56,6 +56,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		webhook := ""
 		jid := ""
 		events := ""
+		imagebase64 := ""
 
 		// Get token from headers or uri parameters
 		token := r.Header.Get("token")
@@ -67,25 +68,26 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,webhook,jid,events FROM users WHERE token=? LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			for rows.Next() {
-				err = rows.Scan(&txtid, &webhook, &jid, &events)
+				err = rows.Scan(&txtid, &webhook, &jid, &events, &imagebase64)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
 				}
 				userid, _ = strconv.Atoi(txtid)
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Events":  events,
+					"Id":          txtid,
+					"Jid":         jid,
+					"Webhook":     webhook,
+					"Token":       token,
+					"Events":      events,
+					"ImageBase64": imagebase64,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -114,6 +116,7 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 		webhook := ""
 		jid := ""
 		events := ""
+		imagebase64 := ""
 
 		// Get token from headers or uri parameters
 		token := r.Header.Get("token")
@@ -125,25 +128,26 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,webhook,jid,events FROM users WHERE token=? LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			for rows.Next() {
-				err = rows.Scan(&txtid, &webhook, &jid, &events)
+				err = rows.Scan(&txtid, &webhook, &jid, &events, &imagebase64)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
 				}
 				userid, _ = strconv.Atoi(txtid)
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Events":  events,
+					"Id":          txtid,
+					"Jid":         jid,
+					"Webhook":     webhook,
+					"Token":       token,
+					"Events":      events,
+					"ImageBase64": imagebase64,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -176,6 +180,7 @@ func (s *server) Connect() http.HandlerFunc {
 		jid := r.Context().Value("userinfo").(Values).Get("Jid")
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		token := r.Context().Value("userinfo").(Values).Get("Token")
+
 		userid, _ := strconv.Atoi(txtid)
 		eventstring := ""
 
@@ -802,8 +807,157 @@ func (s *server) SendAudio() http.HandlerFunc {
 	}
 }
 
-// Sends an Image message
 func (s *server) SendImage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		userid, _ := strconv.Atoi(txtid)
+		msgid := ""
+
+		if clientPointer[userid] == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
+			return
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		var t struct {
+			Phone       string
+			Image       string
+			Caption     string
+			Id          string
+			Priority    int
+			ContextInfo waProto.ContextInfo
+		}
+
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone obrigatório"))
+			return
+		}
+
+		// Verificar se a imagem está no Payload ou no usuário
+		if t.Image == "" {
+			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
+			t.Image = imageBase64
+		}
+
+		// Caso ainda não tenha imagem, retornar erro
+		if t.Image == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
+			return
+		}
+
+		if t.Id == "" {
+			msgid = whatsmeow.GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		var uploaded whatsmeow.UploadResponse
+		var filedata []byte
+		var thumbnailBytes []byte
+
+		if strings.HasPrefix(t.Image, "data:image") {
+			dataURL, err := dataurl.DecodeString(t.Image)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar a imagem base64"))
+				return
+			}
+
+			filedata = dataURL.Data
+			uploaded, err = clientPointer[userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao fazer upload da imagem"))
+				return
+			}
+
+			reader := bytes.NewReader(filedata)
+			img, _, err := image.Decode(reader)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao processar thumbnail"))
+				return
+			}
+
+			thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+			tmpFile, err := os.CreateTemp("", "thumbnail-*.jpg")
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao criar arquivo temporário para thumbnail"))
+				return
+			}
+			defer os.Remove(tmpFile.Name())
+
+			if err := jpeg.Encode(tmpFile, thumbnail, nil); err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao codificar thumbnail em JPEG"))
+				return
+			}
+
+			thumbnailBytes, err = os.ReadFile(tmpFile.Name())
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao ler arquivo de thumbnail"))
+				return
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Formato de imagem inválido"))
+			return
+		}
+
+		msg := waProto.Message{
+			ImageMessage: &waProto.ImageMessage{
+				Caption:       proto.String(t.Caption),
+				URL:           proto.String(uploaded.URL),
+				DirectPath:    proto.String(uploaded.DirectPath),
+				MediaKey:      uploaded.MediaKey,
+				Mimetype:      proto.String(http.DetectContentType(filedata)),
+				FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256:    uploaded.FileSHA256,
+				FileLength:    proto.Uint64(uint64(len(filedata))),
+				JPEGThumbnail: thumbnailBytes,
+			},
+		}
+
+		if t.ContextInfo.StanzaID != nil {
+			msg.ImageMessage.ContextInfo = &waProto.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			}
+		}
+
+		if t.ContextInfo.MentionedJID != nil {
+			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		}
+
+		// Enfileirar no RabbitMQ
+		rabbitMQURL := getRabbitMQURL()
+		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+
+		msgData, _ := json.Marshal(map[string]interface{}{
+			"Id":       msgid,
+			"Phone":    t.Phone,
+			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
+		})
+
+		queue.Enqueue(string(msgData), uint8(t.Priority))
+
+		log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
+
+		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": msgid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
+// Sends an Image message
+func (s *server) SendImageOLD() http.HandlerFunc {
 
 	type imageStruct struct {
 		Phone       string
@@ -1629,6 +1783,15 @@ func (s *server) SendList() http.HandlerFunc {
 }
 
 func (s *server) SendMessage() http.HandlerFunc {
+
+	type textStruct struct {
+		Phone       string
+		Body        string
+		Id          string
+		Priority    int
+		ContextInfo waProto.ContextInfo
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		userid, _ := strconv.Atoi(txtid)
@@ -1638,47 +1801,63 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
+		msgid := ""
 		decoder := json.NewDecoder(r.Body)
-		var t struct {
-			Phone    string
-			Body     string
-			Id       string
-			Priority int // Adicionando prioridade no payload
-		}
-
+		var t textStruct
 		err := decoder.Decode(&t)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar Payload"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Could not decode Payload"))
 			return
 		}
 
 		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone obrigatório"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Missing Phone in Payload"))
 			return
 		}
 
 		if t.Body == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("O corpo da mensagem não pode estar vazio"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Missing Body in Payload"))
 			return
 		}
 
-		// Criando fila Redis
-		queue := NewRedisQueue("172.30.245.133:6379", "WuzAPI Messages Queue")
+		rabbitMQURL := getRabbitMQURL()
+		queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
 
-		// Criando um ID para a mensagem, caso não tenha sido fornecido
 		if t.Id == "" {
-			t.Id = whatsmeow.GenerateMessageID()
+			msgid = whatsmeow.GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		msg := &waProto.Message{
+			ExtendedTextMessage: &waProto.ExtendedTextMessage{
+				Text: &t.Body,
+			},
+		}
+
+		if t.ContextInfo.StanzaID != nil {
+			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			}
+		}
+		if t.ContextInfo.MentionedJID != nil {
+			if msg.ExtendedTextMessage.ContextInfo == nil {
+				msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{}
+			}
+			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
 		}
 
 		// Criando uma string JSON para a mensagem na fila
-		msgData, _ := json.Marshal(map[string]string{
-			"Id":    t.Id,
-			"Phone": t.Phone,
-			"Body":  t.Body,
+		msgData, _ := json.Marshal(map[string]interface{}{
+			"Id":       msgid,
+			"Phone":    t.Phone,
+			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
 		})
 
 		// Adiciona a mensagem na fila do Redis com prioridade
-		queue.Enqueue(string(msgData), t.Priority)
+		queue.Enqueue(string(msgData), uint8(t.Priority))
 
 		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
 
@@ -1745,8 +1924,6 @@ func (s *server) SendMessageOLD() http.HandlerFunc {
 		} else {
 			msgid = t.Id
 		}
-
-		//	msg := &waProto.Message{Conversation: &t.Body}
 
 		msg := &waProto.Message{
 			ExtendedTextMessage: &waProto.ExtendedTextMessage{
@@ -3079,15 +3256,17 @@ func (s *server) AddUser() http.HandlerFunc {
 
 		// Parse the request body
 		var user struct {
-			Name       string `json:"name"`
-			Token      string `json:"token"`
-			Webhook    string `json:"webhook"`
-			Expiration int    `json:"expiration"`
-			Events     string `json:"events"`
+			Name        string `json:"name"`
+			Token       string `json:"token"`
+			Webhook     string `json:"webhook"`
+			Expiration  int    `json:"expiration"`
+			Events      string `json:"events"`
+			ImageBase64 string `json:"imagebase64"`
 		}
+
 		err := json.NewDecoder(r.Body).Decode(&user)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Incomplete data in Payload. Required name,token,webhook,expiration,events"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Incomplete data in Payload. Required name,token,webhook,expiration,events, imagebase64"))
 			return
 		}
 
@@ -3104,7 +3283,7 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 
 		// Validate the events input
-		validEvents := []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "All"}
+		validEvents := []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "CallBack", "All"}
 		eventList := strings.Split(user.Events, ",")
 		for _, event := range eventList {
 			event = strings.TrimSpace(event)
@@ -3115,8 +3294,8 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 
 		// Insert the user into the database
-		result, err := s.db.Exec("INSERT INTO users (name, token, webhook, expiration, events, jid, qrcode) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "")
+		result, err := s.db.Exec("INSERT INTO users (name, token, webhook, expiration, events, imagebase64, jid, qrcode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			user.Name, user.Token, user.Webhook, user.Expiration, user.Events, user.ImageBase64, "", "")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("Admin DB Error")
@@ -3164,6 +3343,50 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
+	}
+}
+
+func (s *server) UpdateUserImage() http.HandlerFunc {
+	type updateImageStruct struct {
+		ImageBase64 string `json:"imagebase64"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Obtém o token da URL
+		vars := mux.Vars(r)
+		token := vars["token"]
+
+		if token == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Token é obrigatório na URL"))
+			return
+		}
+
+		var requestData updateImageStruct
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(&requestData)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar JSON"))
+			return
+		}
+
+		// Atualiza a imagem no banco de dados pelo token
+		result, err := s.db.Exec("UPDATE users SET imagebase64 = ? WHERE token = ?", requestData.ImageBase64, token)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Falha ao atualizar a imagem do usuário"))
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			s.Respond(w, r, http.StatusNotFound, errors.New("Usuário não encontrado ou token inválido"))
+			return
+		}
+
+		log.Info().Str("token", token).Msg("Imagem do usuário atualizada com sucesso")
+		response := map[string]interface{}{"message": "Imagem atualizada com sucesso"}
+		responseJson, _ := json.Marshal(response)
+
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 

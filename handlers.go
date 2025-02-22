@@ -3222,14 +3222,15 @@ func (s *server) ListUsers() http.HandlerFunc {
 			}
 
 			user := map[string]interface{}{
-				"id":         id,
-				"name":       name,
-				"token":      token,
-				"webhook":    webhook,
-				"jid":        jid,
-				"connected":  connected == 1,
-				"expiration": expiration,
-				"events":     events,
+				"id":          id,
+				"name":        name,
+				"token":       token,
+				"webhook":     webhook,
+				"jid":         jid,
+				"connected":   connected == 1,
+				"expiration":  expiration,
+				"events":      events,
+				"imagebase64": imagebase64,
 			}
 
 			users = append(users, user)

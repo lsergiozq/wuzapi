@@ -3208,8 +3208,9 @@ func (s *server) ListUsers() http.HandlerFunc {
 			var connectedNull sql.NullInt64
 			var expiration int
 			var events string
+			var imagebase64 string
 
-			err := rows.Scan(&id, &name, &token, &webhook, &jid, &connectedNull, &expiration, &events)
+			err := rows.Scan(&id, &name, &token, &webhook, &jid, &connectedNull, &expiration, &events, &imagebase64)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 				return

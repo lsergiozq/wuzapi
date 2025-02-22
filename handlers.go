@@ -3191,7 +3191,7 @@ func (s *server) ListUsers() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		// Query the database to get the list of users
-		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events FROM users")
+		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events, imagebase64 FROM users")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			return

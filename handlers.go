@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -807,6 +809,38 @@ func (s *server) SendAudio() http.HandlerFunc {
 	}
 }
 
+// ImageToBase64 recebe a URL de uma imagem e retorna a string em Base64
+func ImageToBase64(url string) (string, error) {
+	// Cria um client HTTP otimizado
+	client := &http.Client{
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+
+	// Faz o GET na URL da imagem
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("erro ao baixar a imagem: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Verifica se a resposta foi OK (200)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("erro: status da resposta %s", resp.Status)
+	}
+
+	// Lê todos os bytes da imagem
+	imageBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("erro ao ler a imagem: %v", err)
+	}
+
+	// Converte os bytes da imagem para uma string Base64
+	base64Image := base64.StdEncoding.EncodeToString(imageBytes)
+	return base64Image, nil
+}
+
 func (s *server) SendImage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -860,6 +894,15 @@ func (s *server) SendImage() http.HandlerFunc {
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
 		var thumbnailBytes []byte
+
+		if strings.HasPrefix(t.Image, "https://") {
+			imageBase64, err := ImageToBase64(t.Image)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao converter imagem para base64"))
+				return
+			}
+			t.Image = "data:image/jpeg;base64," + imageBase64
+		}
 
 		if strings.HasPrefix(t.Image, "data:image") {
 			dataURL, err := dataurl.DecodeString(t.Image)

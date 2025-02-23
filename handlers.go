@@ -880,12 +880,6 @@ func (s *server) SendImage() http.HandlerFunc {
 			t.Image = imageBase64
 		}
 
-		// Caso ainda não tenha imagem, retornar erro
-		if t.Image == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
-			return
-		}
-
 		if t.Id == "" {
 			msgid = whatsmeow.GenerateMessageID()
 		} else {
@@ -903,6 +897,17 @@ func (s *server) SendImage() http.HandlerFunc {
 				return
 			}
 			t.Image = "data:image/jpeg;base64," + imageBase64
+		}
+
+		// Caso ainda não tenha imagem, retornar erro
+		if t.Image == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
+			return
+		}
+		// Caso ainda não tenha imagem, retornar erro
+		if t.Image == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
+			return
 		}
 
 		if strings.HasPrefix(t.Image, "data:image") {

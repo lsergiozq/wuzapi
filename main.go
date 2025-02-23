@@ -148,10 +148,28 @@ func main() {
 
 	// Conectar ao RabbitMQ
 	rabbitMQURL := getRabbitMQURL()
-	queue := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+	queue, err = NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize RabbitMQ queue")
+		return
+	}
+	defer func() {
+		if queue != nil {
+			if closeErr := queue.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ queue")
+			}
+			log.Info().Msg("RabbitMQ connection closed")
+		}
+	}()
 
-	log.Println("Worker de mensagens iniciado com RabbitMQ...")
+	log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
 	go processQueue(queue, s)
+
+	// Aguarda sinais para encerrar (ex.: SIGINT, SIGTERM)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	log.Info().Msg("Shutting down wuzapi...")
 
 	<-done
 	log.Info().Msg("Server Stoped")

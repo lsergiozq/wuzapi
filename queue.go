@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/streadway/amqp"
 )
 
@@ -11,15 +14,20 @@ type RabbitMQQueue struct {
 }
 
 // Inicializa a fila no RabbitMQ
-func NewRabbitMQQueue(amqpURL string, queueName string) *RabbitMQQueue {
-	conn, err := amqp.Dial(amqpURL)
+func NewRabbitMQQueue(amqpURL string, queueName string) (*RabbitMQQueue, error) {
+	conn, err := amqp.DialConfig(amqpURL, amqp.Config{
+		Heartbeat: 10 * time.Second,
+	})
 	if err != nil {
 		log.Error().Msg("Falha ao conectar ao RabbitMQ:" + err.Error())
+		return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
 		log.Error().Msg("Falha ao abrir um canal:" + err.Error())
+		conn.Close()
+		return nil, fmt.Errorf("failed to open channel: %v", err)
 	}
 
 	q, err := ch.QueueDeclare(
@@ -31,6 +39,8 @@ func NewRabbitMQQueue(amqpURL string, queueName string) *RabbitMQQueue {
 		amqp.Table{"x-max-priority": 10}, // Habilita prioridade
 	)
 	if err != nil {
+		ch.Close()   // Fecha o canal se falhar ao declarar a fila
+		conn.Close() // Fecha a conexão se falhar ao declarar a fila
 		log.Error().Msg("Falha ao declarar a fila:" + err.Error())
 	}
 
@@ -38,7 +48,7 @@ func NewRabbitMQQueue(amqpURL string, queueName string) *RabbitMQQueue {
 		conn:    conn,
 		channel: ch,
 		queue:   q,
-	}
+	}, nil
 }
 
 // Adiciona uma mensagem na fila com prioridade
@@ -68,4 +78,25 @@ func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 		false,
 		nil,
 	)
+}
+
+// Close fecha o canal e a conexão AMQP
+func (q *RabbitMQQueue) Close() error {
+	if q == nil {
+		return nil // Retorna nil se o queue for nil para evitar pânico
+	}
+	var err error
+	if q.channel != nil {
+		if closeErr := q.channel.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ channel")
+			err = closeErr // Armazena o último erro
+		}
+	}
+	if q.conn != nil {
+		if closeErr := q.conn.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ connection")
+			err = closeErr // Armazena o último erro
+		}
+	}
+	return err
 }

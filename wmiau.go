@@ -188,7 +188,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 		if v, ok := err.(*resty.ResponseError); ok {
 			// v.Response contains the last response from the server
 			// v.Err contains the original error
-			log.Debug().Str("response", v.Response.String()).Msg("resty error")
+			//log.Debug().Str("response", v.Response.String()).Msg("resty error")
 			log.Error().Err(v.Err).Msg("resty error")
 		}
 	})

@@ -217,7 +217,7 @@ func (s *server) Connect() http.HandlerFunc {
 				}
 			}
 			eventstring = strings.Join(subscribedEvents, ",")
-			_, err = s.db.Exec("UPDATE users SET events=? WHERE id=?", eventstring, userid)
+			_, err = s.db.Exec("UPDATE users SET events=? WHERE id=? and events<>'CallBack'", eventstring, userid)
 			if err != nil {
 				log.Warn().Msg("Could not set events in users table")
 			}

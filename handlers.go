@@ -97,6 +97,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 			}
 		} else {
 			ctx = context.WithValue(r.Context(), "userinfo", myuserinfo)
+			log.Info().Msg(myuserinfo.(Values).Get("Id"))
 			userid, _ = strconv.Atoi(myuserinfo.(Values).Get("Id"))
 		}
 

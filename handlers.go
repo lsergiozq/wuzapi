@@ -36,7 +36,7 @@ func (v Values) Get(key string) string {
 	return v.m[key]
 }
 
-var messageTypes = []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "All"}
+var messageTypes = []string{"Message", "ReadReceipt", "Presence", "HistorySync", "ChatPresence", "CallBack", "All"}
 
 func (s *server) authadmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3234,7 +3234,7 @@ func (s *server) ListUsers() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		// Query the database to get the list of users
-		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events, imagebase64 FROM users")
+		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events FROM users")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			return
@@ -3251,9 +3251,8 @@ func (s *server) ListUsers() http.HandlerFunc {
 			var connectedNull sql.NullInt64
 			var expiration int
 			var events string
-			var imagebase64 string
 
-			err := rows.Scan(&id, &name, &token, &webhook, &jid, &connectedNull, &expiration, &events, &imagebase64)
+			err := rows.Scan(&id, &name, &token, &webhook, &jid, &connectedNull, &expiration, &events)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 				return
@@ -3265,15 +3264,14 @@ func (s *server) ListUsers() http.HandlerFunc {
 			}
 
 			user := map[string]interface{}{
-				"id":          id,
-				"name":        name,
-				"token":       token,
-				"webhook":     webhook,
-				"jid":         jid,
-				"connected":   connected == 1,
-				"expiration":  expiration,
-				"events":      events,
-				"imagebase64": imagebase64,
+				"id":         id,
+				"name":       name,
+				"token":      token,
+				"webhook":    webhook,
+				"jid":        jid,
+				"connected":  connected == 1,
+				"expiration": expiration,
+				"events":     events,
 			}
 
 			users = append(users, user)

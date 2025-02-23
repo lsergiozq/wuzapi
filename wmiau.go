@@ -161,7 +161,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 	//store.CompanionProps.PlatformType = waProto.CompanionProps_CHROME.Enum()
 	//store.CompanionProps.Os = proto.String("Mac OS")
 
-	osName := "OW ZAP 1.0"
+	osName := "OW Cloud Zap 2.0"
 	store.DeviceProps.PlatformType = waProto.DeviceProps_UNKNOWN.Enum()
 	store.DeviceProps.Os = &osName
 

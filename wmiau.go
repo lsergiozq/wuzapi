@@ -60,19 +60,23 @@ func (s *server) connectOnStartup() {
 		jid := ""
 		webhook := ""
 		events := ""
-		err = rows.Scan(&txtid, &token, &jid, &webhook, &events)
+		imagebase64 := ""
+
+		err = rows.Scan(&txtid, &token, &jid, &webhook, &events, &imagebase64)
 		if err != nil {
 			log.Error().Err(err).Msg("DB Problem")
 			return
 		} else {
 			log.Info().Str("token", token).Msg("Connect to Whatsapp on startup")
 			v := Values{map[string]string{
-				"Id":      txtid,
-				"Jid":     jid,
-				"Webhook": webhook,
-				"Token":   token,
-				"Events":  events,
+				"Id":          txtid,
+				"Jid":         jid,
+				"Webhook":     webhook,
+				"Token":       token,
+				"Events":      events,
+				"ImageBase64": imagebase64,
 			}}
+
 			userinfocache.Set(token, v, cache.NoExpiration)
 			userid, _ := strconv.Atoi(txtid)
 			// Gets and set subscription to webhook events

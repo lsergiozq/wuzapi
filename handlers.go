@@ -845,7 +845,12 @@ func ImageToBase64(url string) (string, error) {
 func (s *server) SendImage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		log.Info().Str("txtid", txtid).Msg("Conteúdo do txtid")
+
 		userid, _ := strconv.Atoi(txtid)
+
+		log.Info().Str("userid", strconv.Itoa(userid)).Msg("Conteúdo do userid")
 		msgid := ""
 
 		if clientPointer[userid] == nil {
@@ -876,7 +881,6 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		// Verificar se a imagem está no Payload ou no usuário
 		if t.Image == "" {
-			log.Debug().Str("id", msgid).Str("ImageBase64", r.Context().Value("userinfo").(Values).Get("ImageBase64")).Msg("Imagem no usuário")
 			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
 			t.Image = imageBase64
 		}
@@ -902,7 +906,6 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		// Caso ainda não tenha imagem, retornar erro
 		if t.Image == "" {
-			log.Debug().Str("id", msgid).Str("t.Image", t.Image).Msg("Imagem obrigatória no Payload ou no usuário")
 			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
 			return
 		}

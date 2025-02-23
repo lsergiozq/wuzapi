@@ -984,6 +984,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			"Id":       msgid,
 			"Phone":    t.Phone,
 			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
+			"Userid":   userid,
 		})
 
 		queue.Enqueue(string(msgData), uint8(t.Priority))
@@ -1898,6 +1899,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 			"Id":       msgid,
 			"Phone":    t.Phone,
 			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
+			"Userid":   userid,
 		})
 
 		// Adiciona a mensagem na fila do Redis com prioridade

@@ -59,6 +59,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 					Id       string          `json:"Id"`
 					Phone    string          `json:"Phone"`
 					MsgProto json.RawMessage `json:"MsgProto"` // Armazena a mensagem como JSON bruto
+					Userid   int             `json:"Userid"`
 				}
 
 				if err := json.Unmarshal(msg.Body, &msgData); err != nil {
@@ -66,16 +67,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 					continue
 				}
 
-				// Recupera o usuário correto
-				userid := 0
-				for uid, client := range clientPointer {
-					if client.IsConnected() {
-						userid = uid
-						break
-					}
-				}
-
-				if userid == 0 {
+				if msgData.Userid == 0 {
 					log.Error().Msg("Nenhuma sessão ativa no WhatsApp")
 					continue
 				}
@@ -94,7 +86,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 				}
 
 				// Envia a mensagem e captura o resultado
-				resp, err := clientPointer[userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+				resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 				// Define status e detalhes do envio
 				status := "success"
@@ -110,7 +102,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 
 				// Obtém o webhook do usuário
 				webhookurl := ""
-				myuserinfo, found := userinfocache.Get(s.getTokenByUserId(userid))
+				myuserinfo, found := userinfocache.Get(s.getTokenByUserId(msgData.Userid))
 				if found {
 					webhookurl = myuserinfo.(Values).Get("Webhook")
 				}
@@ -141,12 +133,12 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 							"jsonData": string(values),
 							"token":    myuserinfo.(Values).Get("Token"),
 						}
-						go callHook(webhookurl, data, userid)
+						go callHook(webhookurl, data, msgData.Userid)
 
 						log.Info().Str("id", msgData.Id).Str("status", status).Msg("Callback processado")
 					}
 				} else {
-					log.Warn().Str("userid", fmt.Sprintf("%d", userid)).Msg("Nenhum webhook configurado para este usuário")
+					log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
 				}
 			}
 		}

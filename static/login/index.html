@@ -99,7 +99,7 @@
         res = await fetch(baseUrl + "/session/connect", {
           method: "POST",
           headers: myHeaders,
-          body: JSON.stringify({Events: 'All', Immediate: true})
+          body: JSON.stringify({Events: 'CallBack', Immediate: true})
         });
         data = await res.json();
         return data;

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/streadway/amqp"
@@ -13,24 +14,46 @@ type RabbitMQQueue struct {
 	queue   amqp.Queue
 }
 
+var instance *RabbitMQQueue
+var once sync.Once
+
+var rabbitMQConnection *amqp.Connection
+var rabbitMQChannel *amqp.Channel
+
+// Singleton para RabbitMQQueue
+func GetRabbitMQInstance(amqpURL string, queueName string) (*RabbitMQQueue, error) {
+	var err error
+	once.Do(func() {
+		instance, err = NewRabbitMQQueue(amqpURL, queueName)
+	})
+	return instance, err
+}
+
 // Inicializa a fila no RabbitMQ
 func NewRabbitMQQueue(amqpURL string, queueName string) (*RabbitMQQueue, error) {
-	conn, err := amqp.DialConfig(amqpURL, amqp.Config{
-		Heartbeat: 10 * time.Second,
-	})
-	if err != nil {
-		log.Error().Msg("Falha ao conectar ao RabbitMQ:" + err.Error())
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
+
+	if rabbitMQConnection == nil || rabbitMQConnection.IsClosed() {
+		var err error
+		rabbitMQConnection, err = amqp.DialConfig(amqpURL, amqp.Config{
+			Heartbeat: 10 * time.Second,
+		})
+		if err != nil {
+			log.Error().Msg("Falha ao conectar ao RabbitMQ:" + err.Error())
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
+		}
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Error().Msg("Falha ao abrir um canal:" + err.Error())
-		conn.Close()
-		return nil, fmt.Errorf("failed to open channel: %v", err)
+	if rabbitMQChannel == nil {
+		var err error
+		rabbitMQChannel, err = rabbitMQConnection.Channel()
+		if err != nil {
+			log.Error().Msg("Falha ao abrir um canal:" + err.Error())
+			rabbitMQConnection.Close()
+			return nil, fmt.Errorf("failed to open channel: %v", err)
+		}
 	}
 
-	q, err := ch.QueueDeclare(
+	q, err := rabbitMQChannel.QueueDeclare(
 		queueName,
 		true,                             // Persistente
 		false,                            // Não deletar automaticamente
@@ -39,14 +62,13 @@ func NewRabbitMQQueue(amqpURL string, queueName string) (*RabbitMQQueue, error) 
 		amqp.Table{"x-max-priority": 10}, // Habilita prioridade
 	)
 	if err != nil {
-		ch.Close()   // Fecha o canal se falhar ao declarar a fila
-		conn.Close() // Fecha a conexão se falhar ao declarar a fila
 		log.Error().Msg("Falha ao declarar a fila:" + err.Error())
+		return nil, fmt.Errorf("failed to declare queue: %v", err)
 	}
 
 	return &RabbitMQQueue{
-		conn:    conn,
-		channel: ch,
+		conn:    rabbitMQConnection,
+		channel: rabbitMQChannel,
 		queue:   q,
 	}, nil
 }
@@ -83,19 +105,19 @@ func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 // Close fecha o canal e a conexão AMQP
 func (q *RabbitMQQueue) Close() error {
 	if q == nil {
-		return nil // Retorna nil se o queue for nil para evitar pânico
+		return nil
 	}
 	var err error
 	if q.channel != nil {
 		if closeErr := q.channel.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ channel")
-			err = closeErr // Armazena o último erro
+			err = closeErr
 		}
 	}
-	if q.conn != nil {
+	if q.conn != nil && !q.conn.IsClosed() {
 		if closeErr := q.conn.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ connection")
-			err = closeErr // Armazena o último erro
+			err = closeErr
 		}
 	}
 	return err

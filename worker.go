@@ -29,7 +29,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 				log.Warn().Msg("RabbitMQ connection lost, attempting to reconnect...")
 				rabbitMQURL := getRabbitMQURL()
 				var err error
-				queue, err = NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+				queue, err = GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to reconnect to RabbitMQ, retrying in 5 seconds...")
 					retries++

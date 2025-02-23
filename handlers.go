@@ -978,7 +978,7 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		// Enfileirar no RabbitMQ
 		rabbitMQURL := getRabbitMQURL()
-		queue, err := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+		queue, err := GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
 
 		msgData, _ := json.Marshal(map[string]interface{}{
 			"Id":       msgid,
@@ -1866,7 +1866,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		}
 
 		rabbitMQURL := getRabbitMQURL()
-		queue, err := NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+		queue, err := GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
 
 		if t.Id == "" {
 			msgid = whatsmeow.GenerateMessageID()

@@ -150,7 +150,7 @@ func main() {
 	rabbitMQURL := getRabbitMQURL()
 	var queue *RabbitMQQueue // Variável global fora de func main()
 
-	queue, err = NewRabbitMQQueue(rabbitMQURL, "WuzAPI_Messages_Queue")
+	queue, err = GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize RabbitMQ queue")
 		return

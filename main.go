@@ -168,14 +168,13 @@ func main() {
 	cancelChan := make(chan struct{})
 	go processQueue(queue, s, cancelChan)
 
-	// No encerramento, feche o canal para sinalizar o término
-	close(cancelChan)
-
 	// Aguarda sinais para encerrar (ex.: SIGINT, SIGTERM)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 	log.Info().Msg("Shutting down wuzapi...")
+	// No encerramento, feche o canal para sinalizar o término
+	close(cancelChan)
 
 	<-done
 	log.Info().Msg("Server Stoped")

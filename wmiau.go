@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,9 +46,9 @@ type MyClient struct {
 	db             *sql.DB
 }
 
-// Connects to Whatsapp Websocket on server startup if last state was connected
+// Connects to Whatsapp Websocket on server startup if last state was connected or jid is set
 func (s *server) connectOnStartup() {
-	rows, err := s.db.Query("SELECT id,token,jid,webhook,events FROM users WHERE connected=1")
+	rows, err := s.db.Query("SELECT id,token,jid,webhook,events FROM users WHERE connected=1 or jid <> ''")
 	if err != nil {
 		log.Error().Err(err).Msg("DB Problem")
 		return
@@ -359,107 +358,107 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
 
 		// try to get Image if any
-		img := evt.Message.GetImageMessage()
-		if img != nil {
+		// img := evt.Message.GetImageMessage()
+		// if img != nil {
 
-			// check/creates user directory for files
-			userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
-			_, err := os.Stat(userDirectory)
-			if os.IsNotExist(err) {
-				errDir := os.MkdirAll(userDirectory, 0751)
-				if errDir != nil {
-					log.Error().Err(errDir).Msg("Could not create user directory")
-					return
-				}
-			}
+		// 	// check/creates user directory for files
+		// 	userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
+		// 	_, err := os.Stat(userDirectory)
+		// 	if os.IsNotExist(err) {
+		// 		errDir := os.MkdirAll(userDirectory, 0751)
+		// 		if errDir != nil {
+		// 			log.Error().Err(errDir).Msg("Could not create user directory")
+		// 			return
+		// 		}
+		// 	}
 
-			data, err := mycli.WAClient.Download(img)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to download image")
-				return
-			}
-			exts, _ := mime.ExtensionsByType(img.GetMimetype())
-			path = filepath.Join(userDirectory, evt.Info.ID+exts[0])
-			err = os.WriteFile(path, data, 0600)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to save image")
-				return
-			}
-			log.Info().Str("path", path).Msg("Image saved")
-		}
+		// 	data, err := mycli.WAClient.Download(img)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to download image")
+		// 		return
+		// 	}
+		// 	exts, _ := mime.ExtensionsByType(img.GetMimetype())
+		// 	path = filepath.Join(userDirectory, evt.Info.ID+exts[0])
+		// 	err = os.WriteFile(path, data, 0600)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to save image")
+		// 		return
+		// 	}
+		// 	log.Info().Str("path", path).Msg("Image saved")
+		// }
 
 		// try to get Audio if any
-		audio := evt.Message.GetAudioMessage()
-		if audio != nil {
+		// audio := evt.Message.GetAudioMessage()
+		// if audio != nil {
 
-			// check/creates user directory for files
-			userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
-			_, err := os.Stat(userDirectory)
-			if os.IsNotExist(err) {
-				errDir := os.MkdirAll(userDirectory, 0751)
-				if errDir != nil {
-					log.Error().Err(errDir).Msg("Could not create user directory")
-					return
-				}
-			}
+		// 	// check/creates user directory for files
+		// 	userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
+		// 	_, err := os.Stat(userDirectory)
+		// 	if os.IsNotExist(err) {
+		// 		errDir := os.MkdirAll(userDirectory, 0751)
+		// 		if errDir != nil {
+		// 			log.Error().Err(errDir).Msg("Could not create user directory")
+		// 			return
+		// 		}
+		// 	}
 
-			data, err := mycli.WAClient.Download(audio)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to download audio")
-				return
-			}
-			exts, _ := mime.ExtensionsByType(audio.GetMimetype())
-			var ext string
-			if len(exts) > 0 {
-				ext = exts[0]
-			} else {
-				ext = ".ogg"
-			}
-			path = filepath.Join(userDirectory, evt.Info.ID+ext)
-			err = os.WriteFile(path, data, 0600)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to save audio")
-				return
-			}
-			log.Info().Str("path", path).Msg("Audio saved")
-		}
+		// 	data, err := mycli.WAClient.Download(audio)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to download audio")
+		// 		return
+		// 	}
+		// 	exts, _ := mime.ExtensionsByType(audio.GetMimetype())
+		// 	var ext string
+		// 	if len(exts) > 0 {
+		// 		ext = exts[0]
+		// 	} else {
+		// 		ext = ".ogg"
+		// 	}
+		// 	path = filepath.Join(userDirectory, evt.Info.ID+ext)
+		// 	err = os.WriteFile(path, data, 0600)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to save audio")
+		// 		return
+		// 	}
+		// 	log.Info().Str("path", path).Msg("Audio saved")
+		// }
 
 		// try to get Document if any
-		document := evt.Message.GetDocumentMessage()
-		if document != nil {
+		// document := evt.Message.GetDocumentMessage()
+		// if document != nil {
 
-			// check/creates user directory for files
-			userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
-			_, err := os.Stat(userDirectory)
-			if os.IsNotExist(err) {
-				errDir := os.MkdirAll(userDirectory, 0751)
-				if errDir != nil {
-					log.Error().Err(errDir).Msg("Could not create user directory")
-					return
-				}
-			}
+		// 	// check/creates user directory for files
+		// 	userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
+		// 	_, err := os.Stat(userDirectory)
+		// 	if os.IsNotExist(err) {
+		// 		errDir := os.MkdirAll(userDirectory, 0751)
+		// 		if errDir != nil {
+		// 			log.Error().Err(errDir).Msg("Could not create user directory")
+		// 			return
+		// 		}
+		// 	}
 
-			data, err := mycli.WAClient.Download(document)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to download document")
-				return
-			}
-			extension := ""
-			exts, err := mime.ExtensionsByType(document.GetMimetype())
-			if err != nil {
-				extension = exts[0]
-			} else {
-				filename := document.FileName
-				extension = filepath.Ext(*filename)
-			}
-			path = filepath.Join(userDirectory, evt.Info.ID+extension)
-			err = os.WriteFile(path, data, 0600)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to save document")
-				return
-			}
-			log.Info().Str("path", path).Msg("Document saved")
-		}
+		// 	data, err := mycli.WAClient.Download(document)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to download document")
+		// 		return
+		// 	}
+		// 	extension := ""
+		// 	exts, err := mime.ExtensionsByType(document.GetMimetype())
+		// 	if err != nil {
+		// 		extension = exts[0]
+		// 	} else {
+		// 		filename := document.FileName
+		// 		extension = filepath.Ext(*filename)
+		// 	}
+		// 	path = filepath.Join(userDirectory, evt.Info.ID+extension)
+		// 	err = os.WriteFile(path, data, 0600)
+		// 	if err != nil {
+		// 		log.Error().Err(err).Msg("Failed to save document")
+		// 		return
+		// 	}
+		// 	log.Info().Str("path", path).Msg("Document saved")
+		// }
 	case *events.Receipt:
 		postmap["type"] = "ReadReceipt"
 		dowebhook = 1

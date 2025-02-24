@@ -3296,7 +3296,7 @@ func (s *server) ListUsers() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		// Query the database to get the list of users
-		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events FROM users")
+		rows, err := s.db.Query("SELECT id, name, token, webhook, jid, connected, expiration, events FROM users order by name")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			return
@@ -3425,6 +3425,14 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		vars := mux.Vars(r)
 		userID := vars["id"]
 
+		//antes de excluir, fechar a conexão com whatsapp
+		userid, _ := strconv.Atoi(userID)
+		if clientPointer[userid] != nil {
+			if clientPointer[userid].IsLoggedIn() && clientPointer[userid].IsConnected() {
+				clientPointer[userid].Logout()
+			}
+		}
+
 		// Delete the user from the database
 		result, err := s.db.Exec("DELETE FROM users WHERE id = ?", userID)
 		if err != nil {
@@ -3466,16 +3474,21 @@ func (s *server) UpdateUserImage() http.HandlerFunc {
 			return
 		}
 
+		userid, err := s.GetUserIdByToken(token)
+		if err != nil {
+			s.Respond(w, r, http.StatusNotFound, errors.New(err.Error()))
+		}
+
 		var requestData updateImageStruct
 		decoder := json.NewDecoder(r.Body)
-		err := decoder.Decode(&requestData)
+		err = decoder.Decode(&requestData)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar JSON"))
 			return
 		}
 
 		// Atualiza a imagem no banco de dados pelo token
-		result, err := s.db.Exec("UPDATE users SET imagebase64 = ? WHERE token = ?", requestData.ImageBase64, token)
+		result, err := s.db.Exec("UPDATE users SET imagebase64 = ? WHERE id = ?", requestData.ImageBase64, userid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Falha ao atualizar a imagem do usuário"))
 			return
@@ -3495,6 +3508,21 @@ func (s *server) UpdateUserImage() http.HandlerFunc {
 	}
 }
 
+func (s *server) GetUserIdByToken(token string) (int, error) {
+	var userId int
+
+	// Consulta o banco de dados usando o token
+	err := s.db.QueryRow("SELECT id FROM users WHERE token = ?", token).Scan(&userId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("Usuário não encontrado para o token: %s", token)
+		}
+		return 0, err
+	}
+
+	return userId, nil
+}
+
 func (s *server) DeleteUserByToken() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -3505,8 +3533,20 @@ func (s *server) DeleteUserByToken() http.HandlerFunc {
 			return
 		}
 
+		userid, err := s.GetUserIdByToken(token)
+		if err != nil {
+			s.Respond(w, r, http.StatusNotFound, errors.New(err.Error()))
+		}
+
+		//antes de excluir, fechar a conexão com whatsapp
+		if clientPointer[userid] != nil {
+			if clientPointer[userid].IsLoggedIn() && clientPointer[userid].IsConnected() {
+				clientPointer[userid].Logout()
+			}
+		}
+
 		// Excluir o usuário do banco de dados com base no token
-		result, err := s.db.Exec("DELETE FROM users WHERE token = ?", token)
+		result, err := s.db.Exec("DELETE FROM users WHERE id = ?", userid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Problem accessing DB"))
 			return

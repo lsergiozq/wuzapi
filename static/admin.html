@@ -69,10 +69,6 @@
                     return response.json();
                 })
                 .then(data => {
-                    if (!data.success) {
-                        alert('Erro ao carregar usuários.');
-                        return;
-                    }
 
                     const users = data.data;
                     const tableBody = document.getElementById('userTable');

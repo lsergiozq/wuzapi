@@ -344,7 +344,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		return
 	case *events.Message:
 		postmap["type"] = "Message"
-		dowebhook = 1
+		dowebhook = 0
 		metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
 		if evt.Info.Type != "" {
 			metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
@@ -465,7 +465,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// }
 	case *events.Receipt:
 		postmap["type"] = "ReadReceipt"
-		dowebhook = 1
+		dowebhook = 0
 		if evt.Type == events.ReceiptTypeRead || evt.Type == events.ReceiptTypeReadSelf {
 			log.Info().Strs("id", evt.MessageIDs).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%d", evt.Timestamp)).Msg("Message was read")
 			if evt.Type == events.ReceiptTypeRead {
@@ -482,7 +482,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 	case *events.Presence:
 		postmap["type"] = "Presence"
-		dowebhook = 1
+		dowebhook = 0
 		if evt.Unavailable {
 			postmap["state"] = "offline"
 			if evt.LastSeen.IsZero() {
@@ -496,7 +496,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 	case *events.HistorySync:
 		postmap["type"] = "HistorySync"
-		dowebhook = 1
+		dowebhook = 0
 
 		// check/creates user directory for files
 		userDirectory := filepath.Join(exPath, "files", "user_"+txtid)
@@ -538,7 +538,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 	case *events.ChatPresence:
 		postmap["type"] = "ChatPresence"
-		dowebhook = 1
+		dowebhook = 0
 		log.Info().Str("state", fmt.Sprintf("%s", evt.State)).Str("media", fmt.Sprintf("%s", evt.Media)).Str("chat", evt.MessageSource.Chat.String()).Str("sender", evt.MessageSource.Sender.String()).Msg("Chat Presence received")
 	case *events.CallOffer:
 		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call offer")

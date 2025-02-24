@@ -48,7 +48,7 @@ type MyClient struct {
 
 // Connects to Whatsapp Websocket on server startup if last state was connected or jid is set
 func (s *server) connectOnStartup() {
-	rows, err := s.db.Query("SELECT id,token,jid,webhook,events FROM users WHERE connected=1 or jid <> ''")
+	rows, err := s.db.Query("SELECT id,token,jid,webhook,events, imagebase64 FROM users WHERE connected=1 or jid <> ''")
 	if err != nil {
 		log.Error().Err(err).Msg("DB Problem")
 		return

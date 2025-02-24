@@ -111,12 +111,12 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 					events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
 
 					// Após o envio, verificar se o webhook deve ser chamado
-					if !Find(events, "Callback") && !Find(events, "All") {
-						log.Warn().Msg("Usuário não está inscrito para Callback. Ignorando webhook.")
+					if !Find(events, "CallBack") && !Find(events, "All") {
+						log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
 					} else {
 						// Criar estrutura de evento no mesmo formato do wmiau.go
 						postmap := map[string]interface{}{
-							"type": "Callback",
+							"type": "CallBack",
 							"event": map[string]interface{}{
 								"id":        msgData.Id,
 								"phone":     msgData.Phone,
@@ -135,7 +135,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 						}
 						go callHook(webhookurl, data, msgData.Userid)
 
-						log.Info().Str("id", msgData.Id).Str("status", status).Msg("Callback processado")
+						log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
 					}
 				} else {
 					log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")

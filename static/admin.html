@@ -85,11 +85,11 @@
                             <td>${user.token}</td>
                             <td>${status}</td>
                             <td>
-                                <button class="btn btn-primary btn-sm" title="Excluir" onclick="sessionLogout(${user.token}')">
-                                    <i class="fas fa-trash-alt"></i>
+                                <button class="btn btn-primary btn-sm" title="Desconectar do WhatsApp" onclick="sessionLogout(${user.token}')">
+                                    <i class="fa-regular fa-circle-xmark"></i>
                                 </button>
                                 <button class="btn btn-danger btn-sm" title="Excluir" onclick="deleteUser(${user.id}, '${token}')">
-                                    <i class="fa-regular fa-circle-xmark"></i>
+                                    <i class="fas fa-trash-alt"></i>
                                 </button>
                             </td>
                         </tr>`;

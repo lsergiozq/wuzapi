@@ -212,9 +212,6 @@ func GetValidNumber(userid int, phone string) (string, error) {
 	// Extrai o JID do primeiro item (ou todos se preferir concatenar)``
 	jid := resp[0].JID.User + "@" + resp[0].JID.Server
 
-	//printa todo o conteúdo da resp via log
-	log.Debug().Interface("resp", resp).Msg("Resposta do IsOnWhatsApp")
-
 	// Retorna o JID formatado
 	return jid, nil
 }

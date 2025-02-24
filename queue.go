@@ -103,6 +103,19 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 }
 
 // Cria fila e canal por usuário
+// GetUserQueue initializes and returns a RabbitMQ queue for a specific user.
+// It connects to the RabbitMQ instance using the provided AMQP URL, opens a channel,
+// and declares a queue with a name based on the user ID. The queue is configured with
+// a maximum priority and a dead-letter exchange.
+//
+// Parameters:
+//   - amqpURL: The URL to connect to the RabbitMQ instance.
+//   - userID: The ID of the user for whom the queue is being created.
+//
+// Returns:
+//   - *RabbitMQQueue: A pointer to the RabbitMQQueue struct containing the connection,
+//     channel, and declared queue.
+//   - error: An error if any step in the process fails, otherwise nil.
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
 	if err != nil {
@@ -171,8 +184,17 @@ func (q *RabbitMQQueue) Close() error {
 	return nil
 }
 
-// Func para retornar o telefone do usuário correto
-func getValidNumber(userid int, phone string) (string, error) {
+// getValidNumber checks if a given phone number is registered on WhatsApp for a specific user.
+// It returns the JID (WhatsApp ID) of the phone number if it is valid, or an error if the number is not found or if there is an issue with the verification process.
+//
+// Parameters:
+//   - userid: An integer representing the user ID.
+//   - phone: A string containing the phone number to be checked.
+//
+// Returns:
+//   - A string containing the JID of the phone number if it is valid.
+//   - An error if the phone number is not found on WhatsApp or if there is an error during the verification process.
+func GetValidNumber(userid int, phone string) (string, error) {
 	// Cria um array de string com o número original
 	phones := []string{phone}
 
@@ -187,8 +209,11 @@ func getValidNumber(userid int, phone string) (string, error) {
 		return "", errors.New("número de telefone não encontrado no WhatsApp")
 	}
 
-	// Extrai o JID do primeiro item (ou todos se preferir concatenar)
-	jid := resp[0].JID.User
+	// Extrai o JID do primeiro item (ou todos se preferir concatenar)``
+	jid := resp[0].JID.User + "@" + resp[0].JID.Server
+
+	//printa todo o conteúdo da resp via log
+	log.Debug().Interface("resp", resp).Msg("Resposta do IsOnWhatsApp")
 
 	// Retorna o JID formatado
 	return jid, nil
@@ -223,7 +248,7 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 						}
 						userCancelChan := make(chan struct{})
 						userConsumers[userID] = &UserConsumer{queue: queue, cancelChan: userCancelChan}
-						go processUserMessages(queue, s, userID, userCancelChan)
+						go ProcessUserMessages(queue, s, userID, userCancelChan)
 						log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
@@ -243,7 +268,7 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 	}()
 }
 
-func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan <-chan struct{}) {
+func ProcessUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan <-chan struct{}) {
 	for {
 		deliveries, err := queue.Dequeue()
 		if err != nil {
@@ -291,7 +316,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 					continue
 				}
 
-				jid, err := getValidNumber(msgData.Userid, msgData.Phone)
+				jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
 				if err != nil {
 					log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to get valid number")
 					delivery.Nack(false, true)

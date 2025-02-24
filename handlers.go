@@ -196,7 +196,7 @@ func (s *server) Connect() http.HandlerFunc {
 			return
 		}
 
-		if clientPointer[userid] != nil && clientPointer[userid].IsLoggedIn() == true && clientPointer[userid].IsConnected() == true {
+		if clientPointer[userid] != nil && clientPointer[userid].IsLoggedIn() && clientPointer[userid].IsConnected() {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Already Connected"))
 			return
 		} else {

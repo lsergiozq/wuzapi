@@ -988,13 +988,6 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		// Serializa MsgProto como protobuf
-		msgProtoBytes, err := proto.Marshal(&msg)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal MsgProto"))
-			return
-		}
-
 		// Cria msgData no formato original
 		msgData, err := json.Marshal(map[string]interface{}{
 			"Id":       msgid,

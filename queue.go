@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -170,6 +171,29 @@ func (q *RabbitMQQueue) Close() error {
 	return nil
 }
 
+// Func para retornar o telefone do usuário correto
+func getValidNumber(userid int, phone string) (string, error) {
+	// Cria um array de string com o número original
+	phones := []string{phone}
+
+	// Verifica se o número está no WhatsApp
+	resp, err := clientPointer[userid].IsOnWhatsApp(phones)
+	if err != nil {
+		return "", fmt.Errorf("erro ao verificar número no WhatsApp: %v", err)
+	}
+
+	// Verifica se a resposta está vazia
+	if len(resp) == 0 {
+		return "", errors.New("número de telefone não encontrado no WhatsApp")
+	}
+
+	// Extrai o JID do primeiro item (ou todos se preferir concatenar)
+	jid := resp[0].JID.User
+
+	// Retorna o JID formatado
+	return jid, nil
+}
+
 // Pool de Consumidores
 func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struct{}) {
 	go func() {
@@ -267,7 +291,14 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 					continue
 				}
 
-				recipient, ok := parseJID(msgData.Phone)
+				jid, err := getValidNumber(msgData.Userid, msgData.Phone)
+				if err != nil {
+					log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to get valid number")
+					delivery.Nack(false, true)
+					continue
+				}
+
+				recipient, ok := parseJID(jid)
 				if !ok {
 					log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
 					delivery.Nack(false, true)

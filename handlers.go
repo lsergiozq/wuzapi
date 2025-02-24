@@ -842,46 +842,6 @@ func ImageToBase64(url string) (string, error) {
 	return base64Image, nil
 }
 
-// func para retornar o telefone do usuário correto
-func (*server) getValidNumber(userid int, phone string) (string, error) {
-
-	type checkUserStruct struct {
-		Phone []string
-	}
-
-	type User struct {
-		Query        string
-		IsInWhatsapp bool
-		JID          string
-		VerifiedName string
-	}
-
-	type UserCollection struct {
-		Users []User
-	}
-
-	// Cria um array de string com o número original
-	phones := []string{phone}
-
-	// Verifica se o número está no WhatsApp
-	resp, err := clientPointer[userid].IsOnWhatsApp(phones)
-	if err != nil {
-		//retorna uma exception
-		return "Telefone não existe no WhatsApp", err
-	}
-
-	jid := ""
-
-	for _, item := range resp {
-		jid = fmt.Sprintf("%s", item.JID)
-		//o jid = `${numberWA}@s.whatsapp.net`;
-		//retirar o @s.whatsapp.net
-		jid = strings.Replace(jid, "@s.whatsapp.net", "", -1)
-	}
-
-	return jid, nil
-}
-
 func (s *server) SendImage() http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -921,9 +881,10 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		t.Phone, err = s.getValidNumber(userid, t.Phone)
+		_, err = validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao validar número de telefone"))
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
@@ -1933,9 +1894,10 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		t.Phone, err = s.getValidNumber(userid, t.Phone)
+		_, err = validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao validar número de telefone"))
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 

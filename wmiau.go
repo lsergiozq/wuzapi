@@ -301,7 +301,14 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				log.Info().Msg("Marked self as available")
 			}
 		}
-	case *events.Connected, *events.PushNameSetting:
+	case *events.Connected:
+		sqlStmt := `UPDATE users SET connected=1 WHERE id=?`
+		_, err = mycli.db.Exec(sqlStmt, mycli.userID)
+		if err != nil {
+			log.Error().Err(err).Msg(sqlStmt)
+			return
+		}
+	case *events.PushNameSetting:
 		if len(mycli.WAClient.Store.PushName) == 0 {
 			return
 		}

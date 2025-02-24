@@ -842,8 +842,50 @@ func ImageToBase64(url string) (string, error) {
 	return base64Image, nil
 }
 
+// func para retornar o telefone do usuário correto
+func (*server) getValidNumber(userid int, phone string) (string, error) {
+
+	type checkUserStruct struct {
+		Phone []string
+	}
+
+	type User struct {
+		Query        string
+		IsInWhatsapp bool
+		JID          string
+		VerifiedName string
+	}
+
+	type UserCollection struct {
+		Users []User
+	}
+
+	// Cria um array de string com o número original
+	phones := []string{phone}
+
+	// Verifica se o número está no WhatsApp
+	resp, err := clientPointer[userid].IsOnWhatsApp(phones)
+	if err != nil {
+		//retorna uma exception
+		return "Telefone não existe no WhatsApp", err
+	}
+
+	jid := ""
+
+	for _, item := range resp {
+		jid = fmt.Sprintf("%s", item.JID)
+		//o jid = `${numberWA}@s.whatsapp.net`;
+		//retirar o @s.whatsapp.net
+		jid = strings.Replace(jid, "@s.whatsapp.net", "", -1)
+	}
+
+	return jid, nil
+}
+
 func (s *server) SendImage() http.HandlerFunc {
+
 	return func(w http.ResponseWriter, r *http.Request) {
+
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
 		log.Info().Str("txtid", txtid).Msg("Conteúdo do txtid")
@@ -879,27 +921,10 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		// Cria um array de string com o número original
-		phones := []string{t.Phone}
-
-		// Verifica se o número está no WhatsApp
-		_, err = clientPointer[userid].IsOnWhatsApp(phones)
+		t.Phone, err = s.getValidNumber(userid, t.Phone)
 		if err != nil {
-			// Verifica se o número tem 13 dígitos e um '9' na quinta posição
-			if len(t.Phone) == 13 && t.Phone[4] == '9' {
-				// Remove o nono dígito e tenta novamente
-				phoneWithoutNine := t.Phone[:4] + t.Phone[5:]
-				phones = []string{phoneWithoutNine}
-
-				_, err = clientPointer[userid].IsOnWhatsApp(phones)
-				if err != nil {
-					s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone não encontrado no WhatsApp em nenhum formato"))
-					return
-				}
-
-				// Atualiza o número para o formato sem o 9
-				t.Phone = phoneWithoutNine
-			}
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao validar número de telefone"))
+			return
 		}
 
 		// Verificar se a imagem está no Payload ou no usuário
@@ -1908,27 +1933,10 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		// Cria um array de string com o número original
-		phones := []string{t.Phone}
-
-		// Verifica se o número está no WhatsApp
-		_, err = clientPointer[userid].IsOnWhatsApp(phones)
+		t.Phone, err = s.getValidNumber(userid, t.Phone)
 		if err != nil {
-			// Verifica se o número tem 13 dígitos e um '9' na quinta posição
-			if len(t.Phone) == 13 && t.Phone[4] == '9' {
-				// Remove o nono dígito e tenta novamente
-				phoneWithoutNine := t.Phone[:4] + t.Phone[5:]
-				phones = []string{phoneWithoutNine}
-
-				_, err = clientPointer[userid].IsOnWhatsApp(phones)
-				if err != nil {
-					s.Respond(w, r, http.StatusBadRequest, errors.New("Número de telefone não encontrado no WhatsApp em nenhum formato"))
-					return
-				}
-
-				// Atualiza o número para o formato sem o 9
-				t.Phone = phoneWithoutNine
-			}
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao validar número de telefone"))
+			return
 		}
 
 		if t.Body == "" {

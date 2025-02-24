@@ -995,26 +995,28 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		msgData := MessageData{
-			Id:         msgid,
-			Phone:      t.Phone,
-			MsgProto:   json.RawMessage(msgProtoBytes),
-			Userid:     userid,
-			RetryCount: 0,
-		}
-		msgBytes, err := json.Marshal(msgData)
+		// Cria msgData no formato original
+		msgData, err := json.Marshal(map[string]interface{}{
+			"Id":       msgid,
+			"Phone":    t.Phone,
+			"MsgProto": &msg, // Objeto *waProto.Message diretamente
+			"Userid":   userid,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal msgData"))
+			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to marshal msgData")
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to marshal msgData: %v", err))
 			return
 		}
 
 		// Valida e aplica Priority
 		priority := uint8(t.Priority)
 		if t.Priority < 0 || t.Priority > 255 {
-			priority = 0 // Valor padrão
+			priority = 0
+			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		if err := queue.Enqueue(string(msgBytes), priority); err != nil {
+		if err := queue.Enqueue(string(msgData), priority); err != nil {
+			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
 			return
 		}
@@ -1927,33 +1929,28 @@ func (s *server) SendMessage() http.HandlerFunc {
 			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
 		}
 
-		// Serializa MsgProto como protobuf
-		msgProtoBytes, err := proto.Marshal(msg)
+		// Cria msgData no formato original
+		msgData, err := json.Marshal(map[string]interface{}{
+			"Id":       msgid,
+			"Phone":    t.Phone,
+			"MsgProto": &msg, // Objeto *waProto.Message diretamente
+			"Userid":   userid,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal MsgProto"))
-			return
-		}
-
-		msgData := MessageData{
-			Id:         msgid,
-			Phone:      t.Phone,
-			MsgProto:   json.RawMessage(msgProtoBytes),
-			Userid:     userid,
-			RetryCount: 0,
-		}
-		msgBytes, err := json.Marshal(msgData)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal msgData"))
+			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to marshal msgData")
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to marshal msgData: %v", err))
 			return
 		}
 
 		// Valida e aplica Priority
 		priority := uint8(t.Priority)
 		if t.Priority < 0 || t.Priority > 255 {
-			priority = 0 // Valor padrão
+			priority = 0
+			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		if err := queue.Enqueue(string(msgBytes), priority); err != nil {
+		if err := queue.Enqueue(string(msgData), priority); err != nil {
+			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
 			return
 		}

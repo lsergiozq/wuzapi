@@ -982,17 +982,42 @@ func (s *server) SendImage() http.HandlerFunc {
 		}
 
 		// Enfileirar no RabbitMQ
-		rabbitMQURL := getRabbitMQURL()
-		queue, err := GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
+		queue, err := GetUserQueue(getRabbitMQURL(), userid)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to get user queue"))
+			return
+		}
 
-		msgData, _ := json.Marshal(map[string]interface{}{
-			"Id":       msgid,
-			"Phone":    t.Phone,
-			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
-			"Userid":   userid,
-		})
+		// Serializa MsgProto como protobuf
+		msgProtoBytes, err := proto.Marshal(&msg)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal MsgProto"))
+			return
+		}
 
-		queue.Enqueue(string(msgData), uint8(t.Priority))
+		msgData := MessageData{
+			Id:         msgid,
+			Phone:      t.Phone,
+			MsgProto:   json.RawMessage(msgProtoBytes),
+			Userid:     userid,
+			RetryCount: 0,
+		}
+		msgBytes, err := json.Marshal(msgData)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal msgData"))
+			return
+		}
+
+		// Valida e aplica Priority
+		priority := uint8(t.Priority)
+		if t.Priority < 0 || t.Priority > 255 {
+			priority = 0 // Valor padrão
+		}
+
+		if err := queue.Enqueue(string(msgBytes), priority); err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
+			return
+		}
 
 		log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 
@@ -1870,8 +1895,11 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		rabbitMQURL := getRabbitMQURL()
-		queue, err := GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
+		queue, err := GetUserQueue(getRabbitMQURL(), userid)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to get user queue"))
+			return
+		}
 
 		if t.Id == "" {
 			msgid = whatsmeow.GenerateMessageID()
@@ -1899,16 +1927,36 @@ func (s *server) SendMessage() http.HandlerFunc {
 			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
 		}
 
-		// Criando uma string JSON para a mensagem na fila
-		msgData, _ := json.Marshal(map[string]interface{}{
-			"Id":       msgid,
-			"Phone":    t.Phone,
-			"MsgProto": msg, // Enfileirando o objeto `msg` corretamente
-			"Userid":   userid,
-		})
+		// Serializa MsgProto como protobuf
+		msgProtoBytes, err := proto.Marshal(msg)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal MsgProto"))
+			return
+		}
 
-		// Adiciona a mensagem na fila do Redis com prioridade
-		queue.Enqueue(string(msgData), uint8(t.Priority))
+		msgData := MessageData{
+			Id:         msgid,
+			Phone:      t.Phone,
+			MsgProto:   json.RawMessage(msgProtoBytes),
+			Userid:     userid,
+			RetryCount: 0,
+		}
+		msgBytes, err := json.Marshal(msgData)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to marshal msgData"))
+			return
+		}
+
+		// Valida e aplica Priority
+		priority := uint8(t.Priority)
+		if t.Priority < 0 || t.Priority > 255 {
+			priority = 0 // Valor padrão
+		}
+
+		if err := queue.Enqueue(string(msgBytes), priority); err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
+			return
+		}
 
 		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
 

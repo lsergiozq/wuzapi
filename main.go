@@ -148,25 +148,16 @@ func main() {
 
 	// Conectar ao RabbitMQ
 	rabbitMQURL := getRabbitMQURL()
-	var queue *RabbitMQQueue // Variável global fora de func main()
-
-	queue, err = GetRabbitMQInstance(rabbitMQURL, "WuzAPI_Messages_Queue")
+	_, err = GetRabbitMQInstance(rabbitMQURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize RabbitMQ queue")
+		log.Fatal().Err(err).Msg("Failed to initialize RabbitMQ")
 		return
 	}
-	defer func() {
-		if queue != nil {
-			if closeErr := queue.Close(); closeErr != nil {
-				log.Warn().Err(closeErr).Msg("Failed to close RabbitMQ queue")
-			}
-			log.Info().Msg("RabbitMQ connection closed")
-		}
-	}()
+	defer queueInstance.Close()
 
 	log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
 	cancelChan := make(chan struct{})
-	go processQueue(queue, s, cancelChan)
+	StartUserConsumers(s, rabbitMQURL, cancelChan)
 
 	// Aguarda sinais para encerrar (ex.: SIGINT, SIGTERM)
 	sigChan := make(chan os.Signal, 1)

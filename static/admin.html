@@ -82,10 +82,10 @@
                         const row = `
                         <tr>
                             <td>${user.name}</td>
-                            <td>${user.token}</td>
+                            <td><a href="https://wuzapi.ow.app.br/login?token=${user.token}" target="_blank">${user.token}</a></td>
                             <td>${status}</td>
                             <td>
-                                <button class="btn btn-primary btn-sm" title="Desconectar do WhatsApp" onclick="sessionLogout(${user.token}')">
+                                <button class="btn btn-primary btn-sm" title="Desconectar do WhatsApp" onclick="sessionLogout('${user.token}')">
                                     <i class="fa-regular fa-circle-xmark"></i>
                                 </button>
                                 <button class="btn btn-danger btn-sm" title="Excluir" onclick="deleteUser(${user.id}, '${token}')">

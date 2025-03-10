@@ -114,20 +114,21 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 //   - error: An error if any step in the process fails, otherwise nil.
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
-	if err != nil {
-		return nil, err
+	if err != nil || globalQueue == nil {
+		log.Error().Err(err).Msg("Falha ao obter instância global do RabbitMQ")
+		return nil, errors.New("RabbitMQ instance is nil")
 	}
 
-	// Verifica se a conexão ainda está aberta
-	if globalQueue.conn.IsClosed() {
+	// Verifica se a conexão está fechada e tenta reconectar
+	if globalQueue.conn == nil || globalQueue.conn.IsClosed() {
 		log.Warn().Msg("Conexão com RabbitMQ está fechada, tentando reconectar...")
-		globalQueue, err = GetRabbitMQInstance(amqpURL) // Tenta reconectar
-		if err != nil {
-			return nil, err
+		globalQueue, err = GetRabbitMQInstance(amqpURL)
+		if err != nil || globalQueue.conn == nil {
+			log.Error().Err(err).Msg("Falha ao restabelecer conexão com RabbitMQ")
+			return nil, errors.New("RabbitMQ connection is nil")
 		}
 	}
 
-	// Protege `userConsumers`, mas NÃO fecha canais sem verificar
 	consumersMutex.Lock()
 	existingConsumer, exists := userConsumers[userID]
 	consumersMutex.Unlock()
@@ -140,7 +141,12 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		consumersMutex.Unlock()
 	}
 
-	// Agora abre um novo canal
+	// 🚀 Correção: Agora verifica se `globalQueue.conn` está nil antes de criar o canal
+	if globalQueue.conn == nil {
+		log.Error().Msg("globalQueue.conn está nil antes de abrir um canal")
+		return nil, errors.New("RabbitMQ connection is nil")
+	}
+
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Falha ao abrir canal para o usuário")

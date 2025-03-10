@@ -80,7 +80,9 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			false,
 			false,
 			false,
-			nil,
+			amqp.Table{
+				"x-message-ttl": 86400000, // 24 horas em milissegundos
+			},
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to declare DLQ")
@@ -122,6 +124,29 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
+	// Verifica se a conexão ainda está aberta
+	if globalQueue.conn.IsClosed() {
+		log.Warn().Msg("Conexão com RabbitMQ está fechada, tentando reconectar...")
+		globalQueue, err = GetRabbitMQInstance(amqpURL) // Tenta reconectar
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Protege `userConsumers`, mas NÃO fecha canais sem verificar
+	consumersMutex.Lock()
+	existingConsumer, exists := userConsumers[userID]
+	consumersMutex.Unlock()
+
+	if exists {
+		log.Warn().Int("userID", userID).Msg("Canal antigo encontrado, fechando antes de criar um novo")
+		existingConsumer.queue.Close() // Fecha o canal antigo
+		consumersMutex.Lock()
+		delete(userConsumers, userID)
+		consumersMutex.Unlock()
+	}
+
+	// Agora abre um novo canal
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
@@ -286,120 +311,129 @@ func ProcessUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 					return
 				}
 
-				var msgData MessageData
-				if err := json.Unmarshal(delivery.Body, &msgData); err != nil {
-					log.Error().Err(err).Msg("Failed to unmarshal message")
-					delivery.Nack(false, true)
-					continue
-				}
+				ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
 
-				if msgData.RetryCount >= maxRetries {
-					log.Warn().Str("id", msgData.Id).Msg("Max retries reached, moving to DLQ")
-					delivery.Nack(false, false)
-					continue
-				}
-
-				client, exists := clientPointer[msgData.Userid]
-				if !exists || client == nil {
-					log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-					delivery.Nack(false, false)
-					continue
-				}
-
-				var msgProto waProto.Message
-				if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
-					log.Error().Err(err).Msg("Failed to unmarshal MsgProto")
-					delivery.Nack(false, true)
-					continue
-				}
-
-				jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
-				if err != nil {
-					log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to get valid number")
-					delivery.Nack(false, true)
-					continue
-				}
-
-				recipient, ok := parseJID(jid)
-				if !ok {
-					log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
-					delivery.Nack(false, true)
-					continue
-				}
-
-				resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
-
-				// Define status e detalhes do envio
-				status := "success"
-				details := "Mensagem enviada com sucesso"
-				timestamp := int64(0)
-
-				if err != nil {
-					status = "error"
-					details = err.Error()
-
-					log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
-					msgData.RetryCount++
-					updatedMessage, err := json.Marshal(msgData)
-					if err != nil {
-						log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
-						delivery.Nack(false, true)
-						continue
-					}
-					if err := queue.Enqueue(string(updatedMessage), delivery.Priority); err != nil {
-						log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
-					}
-					delivery.Ack(false)
-				} else {
-					timestamp = resp.Timestamp.Unix()
-					log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
-					delivery.Ack(false)
-				}
-
-				// Obtém o webhook do usuário
-				webhookurl := ""
-				myuserinfo, found := userinfocache.Get(s.getTokenByUserId(msgData.Userid))
-				if found {
-					webhookurl = myuserinfo.(Values).Get("Webhook")
-				}
-
-				if webhookurl != "" {
-					events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
-
-					// Após o envio, verificar se o webhook deve ser chamado
-					if !Find(events, "CallBack") && !Find(events, "All") {
-						log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
-					} else {
-						// Criar estrutura de evento no mesmo formato do wmiau.go
-						postmap := map[string]interface{}{
-							"type": "CallBack",
-							"event": map[string]interface{}{
-								"id":        msgData.Id,
-								"phone":     msgData.Phone,
-								"status":    status,
-								"details":   details,
-								"timestamp": timestamp,
-							},
-						}
-
-						// Enviar para o webhook
-
-						values, _ := json.Marshal(postmap)
-						data := map[string]string{
-							"jsonData": string(values),
-							"token":    myuserinfo.(Values).Get("Token"),
-						}
-						go callHook(webhookurl, data, msgData.Userid)
-
-						log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
-					}
-				} else {
-					log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
-				}
 			case <-cancelChan:
 				log.Info().Int("userID", userID).Msg("Shutting down user consumer")
 				return
 			}
 		}
+	}
+}
+
+func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queue *RabbitMQQueue) {
+
+	if err := json.Unmarshal(delivery.Body, &msgData); err != nil {
+		log.Error().Err(err).Msg("Failed to unmarshal message")
+		delivery.Nack(false, true)
+		return
+	}
+
+	if msgData.RetryCount >= maxRetries {
+		log.Warn().Str("id", msgData.Id).Msg("Max retries reached, moving to DLQ")
+		delivery.Nack(false, false)
+		return
+	}
+
+	client, exists := clientPointer[msgData.Userid]
+	if !exists || client == nil {
+		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
+		delivery.Nack(false, false)
+		return
+	}
+
+	var msgProto waProto.Message
+	if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
+		log.Error().Err(err).Msg("Failed to unmarshal MsgProto")
+		delivery.Nack(false, true)
+		return
+	}
+
+	jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
+	if err != nil {
+		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to get valid number")
+		delivery.Nack(false, true)
+		return
+	}
+
+	recipient, ok := parseJID(jid)
+	if !ok {
+		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
+		delivery.Nack(false, true)
+		return
+	}
+
+	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+
+	// Define status e detalhes do envio
+	status := "success"
+	details := "Mensagem enviada com sucesso"
+	timestamp := int64(0)
+
+	if err != nil {
+		status = "error"
+		details = err.Error()
+
+		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
+		msgData.RetryCount++
+		updatedMessage, err := json.Marshal(msgData)
+		if err != nil {
+			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
+			delivery.Nack(false, true)
+			return
+		}
+		if err := queue.Enqueue(string(updatedMessage), delivery.Priority); err != nil {
+			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
+		}
+		delivery.Ack(false)
+	} else {
+		timestamp = resp.Timestamp.Unix()
+		log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
+		delivery.Ack(false)
+	}
+
+	sendWebhookNotification(s, msgData, timestamp, status, details)
+}
+
+func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, status, details string) {
+	// Obtém o webhook do usuário
+	webhookurl := ""
+	myuserinfo, found := userinfocache.Get(s.getTokenByUserId(msgData.Userid))
+	if found {
+		webhookurl = myuserinfo.(Values).Get("Webhook")
+	}
+
+	if webhookurl != "" {
+		events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
+
+		// Após o envio, verificar se o webhook deve ser chamado
+		if !Find(events, "CallBack") && !Find(events, "All") {
+			log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
+		} else {
+			// Criar estrutura de evento no mesmo formato do wmiau.go
+			postmap := map[string]interface{}{
+				"type": "CallBack",
+				"event": map[string]interface{}{
+					"id":        msgData.Id,
+					"phone":     msgData.Phone,
+					"status":    status,
+					"details":   details,
+					"timestamp": timestamp,
+				},
+			}
+
+			// Enviar para o webhook
+
+			values, _ := json.Marshal(postmap)
+			data := map[string]string{
+				"jsonData": string(values),
+				"token":    myuserinfo.(Values).Get("Token"),
+			}
+			go callHook(webhookurl, data, msgData.Userid)
+
+			log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+		}
+	} else {
+		log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
 	}
 }

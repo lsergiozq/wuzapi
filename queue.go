@@ -300,12 +300,7 @@ func ProcessUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 		deliveries, err := queue.Dequeue()
 		if err != nil {
 			log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages, retrying in 5 seconds")
-			select {
-			case <-cancelChan:
-				return
-			case <-time.After(5 * time.Second):
-				continue
-			}
+			return
 		}
 
 		for {

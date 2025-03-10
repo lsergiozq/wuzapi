@@ -115,6 +115,7 @@ func processMessage(msg amqp.Delivery, s *server, queue *RabbitMQQueue) {
 	client, exists := clientPointer[msgData.Userid]
 	if !exists || client == nil {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
+		msg.Nack(false, false) // Rejeita a mensagem
 		return
 	}
 

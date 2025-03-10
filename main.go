@@ -159,7 +159,6 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize RabbitMQ")
 		return
 	}
-	defer queueInstance.Close()
 
 	log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
 	cancelChan := make(chan struct{})

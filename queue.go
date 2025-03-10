@@ -133,18 +133,22 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		}
 	}
 
-	// Protege `userConsumers`, mas NÃO fecha canais sem verificar
+	// 🚀 Protegemos o acesso ao mapa `userConsumers`
 	consumersMutex.Lock()
 	existingConsumer, exists := userConsumers[userID]
-	consumersMutex.Unlock()
-
 	if exists {
 		log.Warn().Int("userID", userID).Msg("Canal antigo encontrado, fechando antes de criar um novo")
-		existingConsumer.queue.Close() // Fecha o canal antigo
-		consumersMutex.Lock()
+
+		// 🚀 Garante que o canal seja fechado corretamente antes de remover do mapa
+		if existingConsumer.queue != nil && existingConsumer.queue.channel != nil {
+			log.Info().Int("userID", userID).Msg("Fechando canal antigo")
+			existingConsumer.queue.channel.Close()
+		}
+
+		// Remove o consumidor antigo do mapa com segurança
 		delete(userConsumers, userID)
-		consumersMutex.Unlock()
 	}
+	consumersMutex.Unlock()
 
 	// Agora abre um novo canal
 	ch, err := globalQueue.conn.Channel()

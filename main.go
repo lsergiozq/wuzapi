@@ -86,6 +86,12 @@ func main() {
 		log.Fatal().Err(err).Msg("Could not open/create " + exPath + "/dbdata/users.db")
 		os.Exit(1)
 	}
+	// Ativa WAL manualmente para garantir suporte a múltiplas conexões
+	_, err = db.Exec("PRAGMA journal_mode=WAL;")
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to set WAL mode")
+	}
+
 	defer db.Close()
 
 	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All", imagebase64 TEXT NOT NULL DEFAULT "");`

@@ -112,7 +112,13 @@ func processMessage(msg amqp.Delivery, s *server, queue *RabbitMQQueue) {
 		return
 	}
 
-	resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+	client, exists := clientPointer[msgData.Userid]
+	if !exists || client == nil {
+		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
+		return
+	}
+
+	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 	if err != nil {
 		msgData.RetryCount++

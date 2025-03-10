@@ -118,15 +118,29 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	// Fecha canal existente antes de abrir um novo
-	consumersMutex.Lock()
-	if existingConsumer, exists := userConsumers[userID]; exists {
-		existingConsumer.queue.Close()
-		delete(userConsumers, userID)
-		log.Warn().Int("userID", userID).Msg("Canal antigo fechado antes de criar um novo")
+	// Verifica se a conexão ainda está aberta
+	if globalQueue.conn.IsClosed() {
+		log.Warn().Msg("Conexão com RabbitMQ está fechada, tentando reconectar...")
+		globalQueue, err = GetRabbitMQInstance(amqpURL) // Tenta reconectar
+		if err != nil {
+			return nil, err
+		}
 	}
+
+	// Protege `userConsumers`, mas NÃO fecha canais sem verificar
+	consumersMutex.Lock()
+	existingConsumer, exists := userConsumers[userID]
 	consumersMutex.Unlock()
 
+	if exists {
+		log.Warn().Int("userID", userID).Msg("Canal antigo encontrado, fechando antes de criar um novo")
+		existingConsumer.queue.Close()
+		consumersMutex.Lock()
+		delete(userConsumers, userID)
+		consumersMutex.Unlock()
+	}
+
+	// Agora abre um novo canal
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Falha ao abrir canal para o usuário")
@@ -150,6 +164,8 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		ch.Close() // Fecha canal para evitar vazamento
 		return nil, err
 	}
+
+	log.Info().Int("userID", userID).Str("queue", queueName).Msg("Fila do usuário criada com sucesso")
 
 	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
 }

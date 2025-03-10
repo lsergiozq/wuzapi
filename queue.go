@@ -39,20 +39,21 @@ var (
 // Singleton para RabbitMQQueue
 // Inicializa a conexão global RabbitMQ
 func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
-	var err error
+	var initErr error
 	once.Do(func() {
 		conn, err := amqp.DialConfig(amqpURL, amqp.Config{Heartbeat: 10 * time.Second})
 		if err != nil {
+			initErr = fmt.Errorf("failed to connect to RabbitMQ: %v", err)
 			log.Error().Err(err).Msg("Failed to connect to RabbitMQ")
 			return
 		}
 		ch, err := conn.Channel()
 		if err != nil {
+			initErr = fmt.Errorf("failed to open global channel: %v", err)
 			log.Error().Err(err).Msg("Failed to open global channel")
 			conn.Close()
 			return
 		}
-		// Configura Dead Letter Exchange
 		err = ch.ExchangeDeclare(
 			"WuzAPI_DLX",
 			"fanout",
@@ -63,6 +64,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			nil,
 		)
 		if err != nil {
+			initErr = fmt.Errorf("failed to declare DLX: %v", err)
 			log.Error().Err(err).Msg("Failed to declare DLX")
 			ch.Close()
 			conn.Close()
@@ -74,12 +76,13 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			false,
 			false,
 			false,
-			amqp.Table{
-				"x-message-ttl": 86400000, // 24 horas em milissegundos
-			},
+			nil,
 		)
 		if err != nil {
+			initErr = fmt.Errorf("failed to declare DLQ: %v", err)
 			log.Error().Err(err).Msg("Failed to declare DLQ")
+			ch.Close()
+			conn.Close()
 			return
 		}
 		err = ch.QueueBind(
@@ -90,12 +93,22 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			nil,
 		)
 		if err != nil {
+			initErr = fmt.Errorf("failed to bind DLQ to DLX: %v", err)
 			log.Error().Err(err).Msg("Failed to bind DLQ to DLX")
+			ch.Close()
+			conn.Close()
 			return
 		}
 		queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
 	})
-	return queueInstance, err
+
+	if initErr != nil {
+		return nil, initErr
+	}
+	if queueInstance == nil {
+		return nil, fmt.Errorf("RabbitMQ instance not initialized")
+	}
+	return queueInstance, nil
 }
 
 // Cria fila e canal por usuário
@@ -114,38 +127,20 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 //   - error: An error if any step in the process fails, otherwise nil.
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
-	if err != nil || globalQueue == nil {
-		log.Error().Err(err).Msg("Falha ao obter instância global do RabbitMQ")
-		return nil, errors.New("RabbitMQ instance is nil")
+	if err != nil {
+		return nil, err
 	}
-
-	// Verifica se a conexão está fechada e tenta reconectar
-	if globalQueue.conn == nil || globalQueue.conn.IsClosed() {
-		log.Warn().Msg("Conexão com RabbitMQ está fechada, tentando reconectar...")
-		globalQueue, err = GetRabbitMQInstance(amqpURL)
-		if err != nil || globalQueue.conn == nil {
-			log.Error().Err(err).Msg("Falha ao restabelecer conexão com RabbitMQ")
-			return nil, errors.New("RabbitMQ connection is nil")
-		}
+	if globalQueue == nil || globalQueue.conn == nil {
+		return nil, fmt.Errorf("RabbitMQ instance not initialized")
 	}
 
 	consumersMutex.Lock()
-	existingConsumer, exists := userConsumers[userID]
-	consumersMutex.Unlock()
-
-	if exists {
-		log.Warn().Int("userID", userID).Msg("Canal antigo encontrado, fechando antes de criar um novo")
+	if existingConsumer, exists := userConsumers[userID]; exists {
 		existingConsumer.queue.Close()
-		consumersMutex.Lock()
 		delete(userConsumers, userID)
-		consumersMutex.Unlock()
+		log.Warn().Int("userID", userID).Msg("Canal antigo fechado antes de criar um novo")
 	}
-
-	// 🚀 Correção: Agora verifica se `globalQueue.conn` está nil antes de criar o canal
-	if globalQueue.conn == nil {
-		log.Error().Msg("globalQueue.conn está nil antes de abrir um canal")
-		return nil, errors.New("RabbitMQ connection is nil")
-	}
+	consumersMutex.Unlock()
 
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
@@ -156,10 +151,10 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
 	q, err := ch.QueueDeclare(
 		queueName,
-		true,  // Durable (persistente)
-		false, // Auto-delete (não deletar automaticamente)
-		false, // Exclusive (não exclusivo)
-		false, // No-wait (aguardar resposta do RabbitMQ)
+		true,
+		false,
+		false,
+		false,
 		amqp.Table{
 			"x-max-priority":         10,
 			"x-dead-letter-exchange": "WuzAPI_DLX",
@@ -167,11 +162,9 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	)
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Falha ao declarar fila do usuário")
-		ch.Close() // Fecha canal para evitar vazamento
+		ch.Close()
 		return nil, err
 	}
-
-	log.Info().Int("userID", userID).Str("queue", queueName).Msg("Fila do usuário criada com sucesso")
 
 	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
 }
@@ -245,6 +238,7 @@ func GetValidNumber(userid int, phone string) (string, error) {
 
 // Pool de Consumidores
 func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struct{}) {
+	const maxQueues = 150 // Adiciona limite
 	go func() {
 		for {
 			select {
@@ -262,8 +256,14 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 			case <-time.After(5 * time.Second):
 				consumersMutex.Lock()
 				activeUsers := make(map[int]bool)
+				queueCount := len(userConsumers)
+
 				for userID := range clientPointer {
 					activeUsers[userID] = true
+					if queueCount >= maxQueues {
+						log.Warn().Msgf("Max queues reached (%d/%d), skipping new consumers", queueCount, maxQueues)
+						continue
+					}
 					if _, exists := userConsumers[userID]; !exists {
 						queue, err := GetUserQueue(amqpURL, userID)
 						if err != nil {
@@ -273,9 +273,11 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 						userCancelChan := make(chan struct{})
 						userConsumers[userID] = &UserConsumer{queue: queue, cancelChan: userCancelChan}
 						go ProcessUserMessages(queue, s, userID, userCancelChan)
+						queueCount++
 						log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
+
 				for userID, consumer := range userConsumers {
 					if !activeUsers[userID] {
 						close(consumer.cancelChan)
@@ -283,6 +285,7 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 							log.Warn().Err(err).Int("userID", userID).Msg("Failed to close user queue")
 						}
 						delete(userConsumers, userID)
+						queueCount--
 						log.Info().Int("userID", userID).Msg("Stopped consumer for inactive user")
 					}
 				}

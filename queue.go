@@ -121,72 +121,75 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
 	if err != nil {
+		log.Error().Err(err).Msg("Falha ao obter instância do RabbitMQ")
 		return nil, err
 	}
-
-	// Verifica se a conexão ainda está aberta
-	if globalQueue.conn.IsClosed() {
+	if globalQueue == nil || globalQueue.conn == nil || globalQueue.conn.IsClosed() {
 		log.Warn().Msg("Conexão com RabbitMQ está fechada, tentando reconectar...")
-		globalQueue, err = GetRabbitMQInstance(amqpURL) // Tenta reconectar
+		globalQueue, err = GetRabbitMQInstance(amqpURL)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// 🚀 Protegemos o acesso ao mapa `userConsumers`
+	// 🚀 Protege `userConsumers` e armazena o canal antigo
 	consumersMutex.Lock()
 	existingConsumer, exists := userConsumers[userID]
-	if exists {
-		log.Warn().Int("userID", userID).Msg("Canal antigo encontrado, fechando antes de criar um novo")
-
-		// 🚀 Garante que o canal seja fechado corretamente antes de remover do mapa
-		if existingConsumer.queue != nil && existingConsumer.queue.channel != nil {
-			log.Info().Int("userID", userID).Msg("Fechando canal antigo")
-			existingConsumer.queue.channel.Close()
-		}
-
-		// Remove o consumidor antigo do mapa com segurança
-		delete(userConsumers, userID)
-	}
 	consumersMutex.Unlock()
 
-	// Agora abre um novo canal
+	var oldChannel *amqp.Channel
+	if exists {
+		log.Warn().Int("userID", userID).Msg("Consumidor antigo encontrado, criando novo")
+
+		if existingConsumer.queue != nil && existingConsumer.queue.channel != nil {
+			oldChannel = existingConsumer.queue.channel // Armazena o canal antigo
+		}
+	}
+
+	// 🚀 Abre um novo canal
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
+		log.Error().Err(err).Int("userID", userID).Msg("Falha ao abrir canal para o usuário")
 		return nil, err
 	}
 
+	log.Info().Int("userID", userID).Msg("Canal criado com sucesso")
+
+	// 🚀 Declara a fila do usuário
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
 	q, err := ch.QueueDeclare(
 		queueName,
-		true,
-		false,
-		false,
-		false,
+		true,  // Durable (persistente)
+		false, // Auto-delete (não deletar automaticamente)
+		false, // Exclusive (não exclusivo)
+		false, // No-wait (aguardar resposta do RabbitMQ)
 		amqp.Table{
 			"x-max-priority":         10,
 			"x-dead-letter-exchange": "WuzAPI_DLX",
 		},
 	)
 	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
-		ch.Close()
+		log.Error().Err(err).Int("userID", userID).Msg("Falha ao declarar fila do usuário")
+		ch.Close() // ✅ Fecha apenas o canal, sem afetar a fila
 		return nil, err
 	}
 
-	// 🚀 Cria um novo consumidor
+	// 🚀 Cria um novo consumidor ANTES de fechar o antigo
 	userQueue := &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}
 
 	consumersMutex.Lock()
 	userConsumers[userID] = &UserConsumer{queue: userQueue, cancelChan: make(chan struct{})}
 	consumersMutex.Unlock()
 
-	log.Info().Int("userID", userID).Str("queue", queueName).Msg("Fila do usuário criada e canal atribuído com sucesso")
+	log.Info().Int("userID", userID).Str("queue", queueName).Msg("Fila e canal atribuídos com sucesso")
+
+	// 🚀 Agora fechamos o canal antigo após garantir que o novo está funcionando
+	if oldChannel != nil {
+		log.Warn().Int("userID", userID).Msg("Fechando canal antigo após inicialização do novo")
+		oldChannel.Close()
+	}
 
 	return userQueue, nil
-
-	//return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
 }
 
 // Adiciona uma mensagem na fila com prioridade

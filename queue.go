@@ -175,7 +175,18 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
+	// 🚀 Cria um novo consumidor
+	userQueue := &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}
+
+	consumersMutex.Lock()
+	userConsumers[userID] = &UserConsumer{queue: userQueue, cancelChan: make(chan struct{})}
+	consumersMutex.Unlock()
+
+	log.Info().Int("userID", userID).Str("queue", queueName).Msg("Fila do usuário criada e canal atribuído com sucesso")
+
+	return userQueue, nil
+
+	//return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
 }
 
 // Adiciona uma mensagem na fila com prioridade

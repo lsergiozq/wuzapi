@@ -137,7 +137,7 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 
 	if exists {
 		if existingConsumer.queue != nil && existingConsumer.queue.channel != nil {
-			if !existingConsumer.queue.channel.IsClosed() {
+			if !existingConsumer.queue.conn.IsClosed() {
 				log.Info().Int("userID", userID).Msg("Reutilizando canal existente")
 				return existingConsumer.queue, nil
 			}

@@ -53,7 +53,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 				continue
 			}
 
-			msg := msgs
+			msg := <-msgs
 			// Decodifica a mensagem JSON da fila
 			var msgData struct {
 				Id       string          `json:"Id"`

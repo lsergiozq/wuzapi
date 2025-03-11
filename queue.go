@@ -110,6 +110,13 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
+	// Fecha o canal antigo, se existir
+	if oldQueue, exists := userConsumers[userID]; exists {
+		log.Warn().Int("userID", userID).Msg("Closing old channel before creating a new one")
+		oldQueue.queue.Close()
+		delete(userConsumers, userID)
+	}
+
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
@@ -153,31 +160,23 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
 	)
 }
 
-func (q *RabbitMQQueue) Dequeue() (amqp.Delivery, error) {
+func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 	deliveries, err := q.channel.Consume(
 		q.queue.Name,
 		fmt.Sprintf("consumer-%d", time.Now().UnixNano()),
-		false, // autoAck: false
-		false, // exclusive
-		false, // noLocal
-		false, // noWait
-		nil,   // args
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to start consuming")
-		return amqp.Delivery{}, err
+		return nil, err
 	}
 
-	// Consome uma única mensagem e fecha o canal
-	select {
-	case delivery := <-deliveries:
-		log.Info().Str("queue", q.queue.Name).Msg("Message received, closing channel after processing")
-		return delivery, nil
-	default:
-		log.Info().Str("queue", q.queue.Name).Msg("No messages available, closing channel")
-		q.channel.Close()
-		return amqp.Delivery{}, fmt.Errorf("no messages in queue")
-	}
+	log.Info().Str("queue", q.queue.Name).Msg("Waiting for messages...")
+	return deliveries, nil
 }
 
 // Close fecha o canal explicitamente (chamado manualmente, se necessário)
@@ -241,9 +240,11 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 				}
 				consumersMutex.Unlock()
 				return
+
 			case <-time.After(5 * time.Second):
 				consumersMutex.Lock()
 				activeUsers := make(map[int]bool)
+
 				for userID := range clientPointer {
 					activeUsers[userID] = true
 					if _, exists := userConsumers[userID]; !exists {
@@ -254,10 +255,12 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 						}
 						userCancelChan := make(chan struct{})
 						userConsumers[userID] = &UserConsumer{queue: queue, cancelChan: userCancelChan}
-						go ProcessUserMessages(queue, s, userID, userCancelChan)
+						go processUserMessages(queue, s, userID, userCancelChan)
 						log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
+
+				// Verifica consumidores que devem ser removidos
 				for userID, consumer := range userConsumers {
 					if !activeUsers[userID] {
 						close(consumer.cancelChan)
@@ -274,28 +277,41 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 	}()
 }
 
-func ProcessUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan <-chan struct{}) {
+func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan chan struct{}) {
+	deliveries, err := queue.Dequeue()
+	if err != nil {
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages")
+		return
+	}
+
+	log.Info().Int("userID", userID).Msg("Consumer started successfully")
+
+	// Adicionando o consumidor ao userConsumers
+	consumersMutex.Lock()
+	userConsumers[userID] = &UserConsumer{queue: queue, cancelChan: cancelChan}
+	consumersMutex.Unlock()
+
 	for {
-		for {
-			delivery, err := queue.Dequeue()
-			if err != nil {
-				log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages, retrying in 5 seconds")
-				select {
-				case <-cancelChan:
-					return
-				case <-time.After(5 * time.Second):
-					continue
-				}
+		select {
+		case delivery, ok := <-deliveries:
+			if !ok {
+				log.Warn().Int("userID", userID).Msg("Delivery channel closed. Cleaning up resources...")
+				consumersMutex.Lock()
+				queue.Close() // Fecha o canal ao sair
+				delete(userConsumers, userID)
+				consumersMutex.Unlock()
+				return
 			}
 
 			ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
 
-			select {
-			case <-cancelChan:
-				log.Info().Int("userID", userID).Msg("Shutting down user consumer")
-				return
-			default:
-			}
+		case <-cancelChan:
+			log.Info().Int("userID", userID).Msg("Shutting down user consumer")
+			consumersMutex.Lock()
+			queue.Close() // Fecha o canal ao encerrar
+			delete(userConsumers, userID)
+			consumersMutex.Unlock()
+			return
 		}
 	}
 }

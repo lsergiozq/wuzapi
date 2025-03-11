@@ -4,19 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/streadway/amqp"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 )
 
-const maxRetries = 3 // Valor único e consistente em todo o código
-
 func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
-	var msgs <-chan amqp.Delivery
-	var err error
+	maxRetries := 10
+	retries := 0
 
 	for {
 		select {
@@ -29,30 +27,118 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 		default:
 			if queue == nil || queue.conn == nil || queue.conn.IsClosed() {
 				log.Warn().Msg("RabbitMQ connection lost, attempting to reconnect...")
-				if queue != nil {
-					queue.Close()
-				}
 				rabbitMQURL := getRabbitMQURL()
+				var err error
 				queue, err = GetRabbitMQInstance(rabbitMQURL)
 				if err != nil {
-					log.Error().Err(err).Msg("Failed to reconnect, retrying in 5 seconds...")
+					log.Error().Err(err).Msg("Failed to reconnect to RabbitMQ, retrying in 5 seconds...")
+					retries++
+					if retries > maxRetries {
+						log.Fatal().Msg("Exceeded maximum number of reconnection attempts, exiting...")
+						os.Exit(1)
+					}
 					time.Sleep(5 * time.Second)
 					continue
 				}
+				retries = 0
 			}
 
-			if msgs == nil {
-				msgs, err = queue.Dequeue()
-				if err != nil {
-					log.Error().Err(err).Msg("Error starting consumer, retrying...")
+			msgs, err := queue.Dequeue()
+			if err != nil {
+				log.Error().Err(err).Msg("Error consuming messages from queue, attempting to reconnect...")
+				if queue != nil {
 					queue.Close()
-					queue = nil
-					continue
 				}
+				queue = nil
+				continue
 			}
 
-			for msg := range msgs {
-				processMessage(msg, s, queue)
+			msg := <-msgs
+			// Decodifica a mensagem JSON da fila
+			var msgData struct {
+				Id       string          `json:"Id"`
+				Phone    string          `json:"Phone"`
+				MsgProto json.RawMessage `json:"MsgProto"` // Armazena a mensagem como JSON bruto
+				Userid   int             `json:"Userid"`
+			}
+
+			if err := json.Unmarshal(msg.Body, &msgData); err != nil {
+				log.Error().Msg("Erro ao decodificar mensagem da fila: " + err.Error())
+				continue
+			}
+
+			if msgData.Userid == 0 {
+				log.Error().Msg("Nenhuma sessão ativa no WhatsApp")
+				continue
+			}
+
+			// Decodifica `msgProto` diretamente da fila
+			var msgProto waProto.Message
+			if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
+				log.Error().Msg("Erro ao decodificar MsgProto: " + err.Error())
+				continue
+			}
+
+			recipient, ok := parseJID(msgData.Phone)
+			if !ok {
+				log.Error().Msg("Erro ao converter telefone para JID")
+				continue
+			}
+
+			// Envia a mensagem e captura o resultado
+			resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+
+			// Define status e detalhes do envio
+			status := "success"
+			details := "Mensagem enviada com sucesso"
+			timestamp := int64(0)
+
+			if err != nil {
+				status = "error"
+				details = err.Error()
+			} else {
+				timestamp = resp.Timestamp.Unix()
+			}
+
+			// Obtém o webhook do usuário
+			webhookurl := ""
+			myuserinfo, found := userinfocache.Get(s.getTokenByUserId(msgData.Userid))
+			if found {
+				webhookurl = myuserinfo.(Values).Get("Webhook")
+			}
+
+			if webhookurl != "" {
+				events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
+
+				// Após o envio, verificar se o webhook deve ser chamado
+				if !Find(events, "CallBack") && !Find(events, "All") {
+					log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
+				} else {
+					// Criar estrutura de evento no mesmo formato do wmiau.go
+					postmap := map[string]interface{}{
+						"type": "CallBack",
+						"event": map[string]interface{}{
+							"id":        msgData.Id,
+							"phone":     msgData.Phone,
+							"status":    status,
+							"details":   details,
+							"timestamp": timestamp,
+						},
+					}
+
+					// Enviar para o webhook
+
+					values, _ := json.Marshal(postmap)
+					data := map[string]string{
+						"jsonData": string(values),
+						"token":    myuserinfo.(Values).Get("Token"),
+					}
+					go callHook(webhookurl, data, msgData.Userid)
+
+					log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+				}
+			} else {
+				log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
 			}
 		}
 	}
@@ -67,127 +153,4 @@ func (s *server) getTokenByUserId(userid int) string {
 		return ""
 	}
 	return token
-}
-
-func processMessage(msg amqp.Delivery, s *server, queue *RabbitMQQueue) {
-	var msgData struct {
-		Id         string          `json:"Id"`
-		Phone      string          `json:"Phone"`
-		MsgProto   json.RawMessage `json:"MsgProto"`
-		Userid     int             `json:"Userid"`
-		RetryCount int             `json:"RetryCount,omitempty"`
-	}
-
-	if err := json.Unmarshal(msg.Body, &msgData); err != nil {
-		log.Error().Msg("Erro ao decodificar mensagem: " + err.Error())
-		msg.Nack(false, false)
-		return
-	}
-
-	if msgData.Userid == 0 {
-		log.Error().Msg("Nenhuma sessão ativa no WhatsApp")
-		msg.Nack(false, false)
-		return
-	}
-
-	var msgProto waProto.Message
-	if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
-		log.Error().Msg("Erro ao decodificar MsgProto: " + err.Error())
-		msg.Nack(false, false)
-		return
-	}
-
-	// 🚀 Nova validação: Verifica se o número está no WhatsApp antes de enviar
-	jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
-	if err != nil {
-		log.Error().Err(err).Str("id", msgData.Id).Msg("Número inválido no WhatsApp")
-		msg.Nack(false, false)
-		return
-	}
-
-	recipient, ok := parseJID(jid)
-	if !ok {
-		log.Error().Msg("Erro ao converter telefone para JID")
-		msg.Nack(false, false)
-		return
-	}
-
-	client, exists := clientPointer[msgData.Userid]
-	if !exists || client == nil {
-		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-		msg.Nack(false, false) // Rejeita a mensagem
-		return
-	}
-
-	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
-
-	if err != nil {
-		msgData.RetryCount++
-		if msgData.RetryCount >= maxRetries {
-			log.Warn().Str("id", msgData.Id).Msg("Max retries reached, moving to DLQ")
-			msg.Nack(false, false)
-			return
-		}
-
-		updatedMessage, _ := json.Marshal(msgData)
-		if err := queue.Enqueue(string(updatedMessage), msg.Priority); err != nil {
-			log.Error().Err(err).Str("id", msgData.Id).Msg("Falha ao reenfileirar mensagem")
-		}
-		msg.Ack(false)
-		return
-	}
-
-	msg.Ack(false)
-
-	log.Info().
-		Str("id", msgData.Id).
-		Str("phone", msgData.Phone).
-		Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).
-		Msg("Mensagem enviada com sucesso")
-
-	sendWebhookNotification(s, msgData, resp.Timestamp.Unix(), "success", "Mensagem enviada com sucesso")
-}
-
-func sendWebhookNotification(s *server, msgData struct {
-	Id         string          `json:"Id"`
-	Phone      string          `json:"Phone"`
-	MsgProto   json.RawMessage `json:"MsgProto"`
-	Userid     int             `json:"Userid"`
-	RetryCount int             `json:"RetryCount,omitempty"`
-}, timestamp int64, status, details string) {
-	webhookurl := ""
-	myuserinfo, found := userinfocache.Get(s.getTokenByUserId(msgData.Userid))
-	if found {
-		webhookurl = myuserinfo.(Values).Get("Webhook")
-	}
-
-	if webhookurl != "" {
-		events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
-
-		if !Find(events, "CallBack") && !Find(events, "All") {
-			log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
-		} else {
-			postmap := map[string]interface{}{
-				"type": "CallBack",
-				"event": map[string]interface{}{
-					"id":        msgData.Id,
-					"phone":     msgData.Phone,
-					"status":    status,
-					"details":   details,
-					"timestamp": timestamp,
-				},
-			}
-
-			values, _ := json.Marshal(postmap)
-			data := map[string]string{
-				"jsonData": string(values),
-				"token":    myuserinfo.(Values).Get("Token"),
-			}
-			go callHook(webhookurl, data, msgData.Userid)
-
-			log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
-		}
-	} else {
-		log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
-	}
 }

@@ -110,14 +110,10 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	consumersMutex.Lock()
-	defer consumersMutex.Unlock()
-
-	// Fecha o canal antigo, se existir
-	if oldQueue, exists := userConsumers[userID]; exists {
-		log.Warn().Int("userID", userID).Msg("Closing old channel before creating a new one")
-		oldQueue.queue.Close()
-		delete(userConsumers, userID)
+	// Verifica se já existe um consumidor ativo
+	if consumer, exists := userConsumers[userID]; exists && consumer.queue.channel != nil {
+		log.Info().Int("userID", userID).Msg("Reusing existing queue for user")
+		return consumer.queue, nil
 	}
 
 	ch, err := globalQueue.conn.Channel()
@@ -228,13 +224,14 @@ func GetValidNumber(userid int, phone string) (string, error) {
 }
 
 // Pool de Consumidores
-func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struct{}) {
+func StartUserConsumers(s *server, amqpURL string, globalCancelChan chan struct{}) {
 	go func() {
 		for {
 			select {
 			case <-globalCancelChan:
 				consumersMutex.Lock()
 				for userID, consumer := range userConsumers {
+					log.Warn().Int("userID", userID).Msg("Shutting down consumer")
 					close(consumer.cancelChan)
 					if err := consumer.queue.Close(); err != nil {
 						log.Warn().Err(err).Int("userID", userID).Msg("Failed to close user queue")
@@ -245,36 +242,47 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 				return
 
 			case <-time.After(5 * time.Second):
-				consumersMutex.Lock()
 				activeUsers := make(map[int]bool)
 
 				for userID := range clientPointer {
 					activeUsers[userID] = true
-					if _, exists := userConsumers[userID]; !exists {
+
+					// Evita bloqueios desnecessários
+					consumersMutex.Lock()
+					_, exists := userConsumers[userID]
+					consumersMutex.Unlock()
+
+					if !exists {
 						queue, err := GetUserQueue(amqpURL, userID)
 						if err != nil {
 							log.Error().Err(err).Int("userID", userID).Msg("Failed to create user queue")
 							continue
 						}
+
 						userCancelChan := make(chan struct{})
+
+						// Agora protegemos a escrita no `userConsumers`
+						consumersMutex.Lock()
 						userConsumers[userID] = &UserConsumer{queue: queue, cancelChan: userCancelChan}
+						consumersMutex.Unlock()
+
 						go processUserMessages(queue, s, userID, userCancelChan)
 						log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
 
-				// Verifica consumidores que devem ser removidos
+				// Remover consumidores inativos sem bloquear o mutex por muito tempo
 				for userID, consumer := range userConsumers {
 					if !activeUsers[userID] {
+						log.Warn().Int("userID", userID).Msg("Closing inactive consumer")
 						close(consumer.cancelChan)
-						if err := consumer.queue.Close(); err != nil {
-							log.Warn().Err(err).Int("userID", userID).Msg("Failed to close user queue")
-						}
+
+						consumersMutex.Lock()
+						consumer.queue.Close()
 						delete(userConsumers, userID)
-						log.Info().Int("userID", userID).Msg("Stopped consumer for inactive user")
+						consumersMutex.Unlock()
 					}
 				}
-				consumersMutex.Unlock()
 			}
 		}
 	}()

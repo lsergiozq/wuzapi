@@ -110,6 +110,9 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
+	consumersMutex.Lock()
+	defer consumersMutex.Unlock()
+
 	// Fecha o canal antigo, se existir
 	if oldQueue, exists := userConsumers[userID]; exists {
 		log.Warn().Int("userID", userID).Msg("Closing old channel before creating a new one")

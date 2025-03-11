@@ -38,6 +38,7 @@ var (
 	once           sync.Once
 	userConsumers  = make(map[int]*UserConsumer)
 	userChannels   = make(map[int]*amqp.Channel) // Mapa para armazenar canais por userID
+	channelsMutex  sync.Mutex                    // Protege o mapa
 	consumersMutex sync.Mutex
 )
 
@@ -105,70 +106,25 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 	return queueInstance, err
 }
 
-// Cria fila e canal por usuário
-// GetUserQueue initializes and returns a RabbitMQ queue for a specific user.
-// It connects to the RabbitMQ instance using the provided AMQP URL, opens a channel,
-// and declares a queue with a name based on the user ID. The queue is configured with
-// a maximum priority and a dead-letter exchange.
-//
-// Parameters:
-//   - amqpURL: The URL to connect to the RabbitMQ instance.
-//   - userID: The ID of the user for whom the queue is being created.
-//
-// Returns:
-//   - *RabbitMQQueue: A pointer to the RabbitMQQueue struct containing the connection,
-//     channel, and declared queue.
-//   - error: An error if any step in the process fails, otherwise nil.
-var (
-	channelsMutex sync.Mutex // Mutex para proteger acesso ao mapa
-)
-
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
 	if err != nil {
 		return nil, err
 	}
-	if globalQueue == nil || globalQueue.conn == nil {
-		return nil, fmt.Errorf("RabbitMQ instance not initialized")
-	}
 
 	channelsMutex.Lock()
 	defer channelsMutex.Unlock()
 
-	// Verifica se o canal já existe no mapa
-	if ch, exists := userChannels[userID]; exists && ch != nil {
-		// Reutiliza o canal existente
-		log.Info().Int("userID", userID).Msg("Reusing existing channel")
-		queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
-		q, err := ch.QueueDeclare(
-			queueName,
-			true,
-			false,
-			false,
-			false,
-			amqp.Table{
-				"x-max-priority":         10,
-				"x-dead-letter-exchange": "WuzAPI_DLX",
-			},
-		)
+	// Reutiliza canal existente ou cria um novo
+	ch, exists := userChannels[userID]
+	if !exists {
+		ch, err = globalQueue.conn.Channel()
 		if err != nil {
-			log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
-			// Não fecha o canal, apenas retorna o erro
 			return nil, err
 		}
-		return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
+		userChannels[userID] = ch
 	}
 
-	// Cria um novo canal se não existe
-	ch, err := globalQueue.conn.Channel()
-	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
-		return nil, err
-	}
-	userChannels[userID] = ch
-	log.Info().Int("userID", userID).Msg("Created new channel")
-
-	// Declara a fila associada ao canal
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
 	q, err := ch.QueueDeclare(
 		queueName,
@@ -182,8 +138,6 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		},
 	)
 	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
-		// Não fecha o canal, apenas retorna o erro
 		return nil, err
 	}
 

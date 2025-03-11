@@ -82,9 +82,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			false,
 			false,
 			false,
-			amqp.Table{
-				"x-message-ttl": 86400000, // 24 horas em milissegundos
-			},
+			nil,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to declare DLQ")
@@ -112,17 +110,10 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	channelsMutex.Lock()
-	defer channelsMutex.Unlock()
-
-	// Reutiliza canal existente ou cria um novo
-	ch, exists := userChannels[userID]
-	if !exists {
-		ch, err = globalQueue.conn.Channel()
-		if err != nil {
-			return nil, err
-		}
-		userChannels[userID] = ch
+	ch, err := globalQueue.conn.Channel()
+	if err != nil {
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
+		return nil, err
 	}
 
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
@@ -138,6 +129,8 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		},
 	)
 	if err != nil {
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
+		ch.Close()
 		return nil, err
 	}
 
@@ -160,21 +153,43 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
 	)
 }
 
-func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	return q.channel.Consume(
+func (q *RabbitMQQueue) Dequeue() (amqp.Delivery, error) {
+	deliveries, err := q.channel.Consume(
 		q.queue.Name,
 		fmt.Sprintf("consumer-%d", time.Now().UnixNano()),
-		false,
-		false,
-		false,
-		false,
-		nil,
+		false, // autoAck: false
+		false, // exclusive
+		false, // noLocal
+		false, // noWait
+		nil,   // args
 	)
+	if err != nil {
+		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to start consuming")
+		return amqp.Delivery{}, err
+	}
+
+	// Consome uma única mensagem e fecha o canal
+	select {
+	case delivery := <-deliveries:
+		log.Info().Str("queue", q.queue.Name).Msg("Message received, closing channel after processing")
+		return delivery, nil
+	default:
+		log.Info().Str("queue", q.queue.Name).Msg("No messages available, closing channel")
+		q.channel.Close()
+		return amqp.Delivery{}, fmt.Errorf("no messages in queue")
+	}
 }
 
+// Close fecha o canal explicitamente (chamado manualmente, se necessário)
 func (q *RabbitMQQueue) Close() error {
-	// Não fecha o canal, apenas retorna nil
-	log.Info().Msg("Close called, but channel remains open for reuse")
+	if q.channel != nil {
+		err := q.channel.Close()
+		if err != nil {
+			log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to close channel")
+			return err
+		}
+		log.Info().Str("queue", q.queue.Name).Msg("Channel closed")
+	}
 	return nil
 }
 
@@ -261,30 +276,25 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan <-chan struc
 
 func ProcessUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan <-chan struct{}) {
 	for {
-		deliveries, err := queue.Dequeue()
-		if err != nil {
-			log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages, retrying in 5 seconds")
-			select {
-			case <-cancelChan:
-				return
-			case <-time.After(5 * time.Second):
-				continue
-			}
-		}
-
 		for {
-			select {
-			case delivery, ok := <-deliveries:
-				if !ok {
-					log.Info().Int("userID", userID).Msg("Delivery channel closed")
+			delivery, err := queue.Dequeue()
+			if err != nil {
+				log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages, retrying in 5 seconds")
+				select {
+				case <-cancelChan:
 					return
+				case <-time.After(5 * time.Second):
+					continue
 				}
+			}
 
-				ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
+			ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
 
+			select {
 			case <-cancelChan:
 				log.Info().Int("userID", userID).Msg("Shutting down user consumer")
 				return
+			default:
 			}
 		}
 	}

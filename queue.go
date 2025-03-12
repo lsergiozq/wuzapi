@@ -85,7 +85,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 		// 🔹 Declara Exchange para mensagens com atraso
 		err = ch.ExchangeDeclare(
 			"WuzAPI_Delayed_Exchange",
-			"x-delayed-message",
+			"direct",
 			true,
 			false,
 			false,

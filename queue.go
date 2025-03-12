@@ -51,6 +51,8 @@ const maxDLQRetries = 3
 func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 	var err error
 	once.Do(func() {
+		log.Info().Msg("Initializing RabbitMQ connection...")
+
 		conn, err := amqp.DialConfig(amqpURL, amqp.Config{Heartbeat: 10 * time.Second})
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to connect to RabbitMQ")
@@ -62,7 +64,10 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			conn.Close()
 			return
 		}
-		// Garante que a exchange DLX existe
+
+		log.Info().Msg("RabbitMQ channel opened")
+
+		// 🔹 Declara Exchange DLX
 		err = ch.ExchangeDeclare(
 			"WuzAPI_DLX",
 			"fanout",
@@ -74,63 +79,91 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 		)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to declare DLX")
+			return // Encerra a execução corretamente
 		}
-		// Configura Dead Letter Exchange
+
+		// 🔹 Declara Exchange para mensagens com atraso
 		err = ch.ExchangeDeclare(
 			"WuzAPI_Delayed_Exchange",
 			"x-delayed-message",
-			true,  // Durable
-			false, // Auto-delete
-			false, // Internal
-			false, // No-wait
+			true,
+			false,
+			false,
+			false,
 			amqp.Table{"x-delayed-type": "direct"},
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to declare DLX")
+			log.Error().Err(err).Msg("Failed to declare Delayed Exchange")
 			ch.Close()
 			conn.Close()
-			return
-		}
-		dlq, err := ch.QueueDeclare(
-			"WuzAPI_Dead_Letter_Queue",
-			true,  // Durable
-			false, // Auto-delete
-			false, // Exclusive
-			false, // No-wait
-			nil,
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to declare DLQ")
-			return
-		}
-		_, err = ch.QueueDeclare(
-			"WuzAPI_Retry_Queue",
-			true,  // Durable
-			false, // Auto-delete
-			false, // Exclusive
-			false, // No-wait
-			amqp.Table{
-				"x-message-ttl":          300000,                    // ✨ 300.000ms = 5 minutos
-				"x-dead-letter-exchange": "WuzAPI_Delayed_Exchange", // ✨ Após 5 minutos, reencaminha para a fila principal
-			},
-		)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to declare Retry Queue")
+			return // 🔥 Garante que a execução pare aqui se falhar
 		}
 
-		err = ch.QueueBind(
-			dlq.Name,
-			"",
-			"WuzAPI_DLX",
+		// 🔹 Declara Dead Letter Queue (DLQ)
+		dlq, err := ch.QueueDeclare(
+			"WuzAPI_Dead_Letter_Queue",
+			true,
+			false,
+			false,
 			false,
 			nil,
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to bind DLQ to DLX")
-			return
+			log.Error().Err(err).Msg("Failed to declare DLQ")
+			ch.Close()
+			conn.Close()
+			return // 🔥 Encerra a execução corretamente se a DLQ falhar
 		}
+
+		// 🔹 Declara a Retry Queue
+		_, err = ch.QueueDeclare(
+			"WuzAPI_Retry_Queue",
+			true,
+			false,
+			false,
+			false,
+			amqp.Table{
+				"x-message-ttl":          300000, // 5 minutos de TTL
+				"x-dead-letter-exchange": "WuzAPI_Delayed_Exchange",
+			},
+		)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to declare Retry Queue")
+			ch.Close()
+			conn.Close()
+			return // 🔥 Encerra a função corretamente
+		}
+
+		// 🔹 Associa a DLQ ao DLX (somente se a fila foi criada com sucesso)
+		if dlq.Name != "" {
+			err = ch.QueueBind(
+				dlq.Name,
+				"",
+				"WuzAPI_DLX",
+				false,
+				nil,
+			)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to bind DLQ to DLX")
+				ch.Close()
+				conn.Close()
+				return // 🔥 Encerra a execução corretamente se falhar
+			}
+		} else {
+			log.Fatal().Msg("DLQ Name is empty, cannot bind to DLX")
+			ch.Close()
+			conn.Close()
+			return // 🔥 Para a execução se a DLQ não for criada corretamente
+		}
+
 		queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
+		log.Info().Msg("RabbitMQ instance successfully initialized") // 📌 Confirmação final
 	})
+
+	if queueInstance == nil {
+		log.Fatal().Msg("RabbitMQ connection was not established") // 🔥 Log crítico
+	}
+
 	return queueInstance, err
 }
 

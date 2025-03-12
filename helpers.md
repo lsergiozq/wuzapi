@@ -23,11 +23,12 @@ sudo docker run -it --rm --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:4.
 ### Visualizar imagens
 
 ```
-sudo docker images
+sudo docker ps
 ```
 
 ### Deletar uma imagem
 
 ```
-sudo docker imagem remove
+sudo docker stop containerid
+sudo docker rm containerid
 ```

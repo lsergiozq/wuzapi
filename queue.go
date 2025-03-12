@@ -26,11 +26,12 @@ type UserConsumer struct {
 }
 
 type MessageData struct {
-	Id         string          `json:"Id"`
-	Phone      string          `json:"Phone"`
-	MsgProto   json.RawMessage `json:"MsgProto"`
-	Userid     int             `json:"Userid"`
-	RetryCount int             `json:"RetryCount,omitempty"`
+	Id            string          `json:"Id"`
+	Phone         string          `json:"Phone"`
+	MsgProto      json.RawMessage `json:"MsgProto"`
+	Userid        int             `json:"Userid"`
+	RetryCount    int             `json:"RetryCount,omitempty"`
+	DLQRetryCount int             `json:"DLQRetryCount,omitempty"`
 }
 
 var (
@@ -42,7 +43,8 @@ var (
 	consumersMutex sync.Mutex
 )
 
-const maxRetries = 3
+const maxRetries = 5
+const maxDLQRetries = 3
 
 // Singleton para RabbitMQQueue
 // Inicializa a conexão global RabbitMQ
@@ -60,7 +62,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			conn.Close()
 			return
 		}
-		// Configura Dead Letter Exchange
+		// Garante que a exchange DLX existe
 		err = ch.ExchangeDeclare(
 			"WuzAPI_DLX",
 			"fanout",
@@ -71,6 +73,19 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			nil,
 		)
 		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to declare DLX")
+		}
+		// Configura Dead Letter Exchange
+		err = ch.ExchangeDeclare(
+			"WuzAPI_Delayed_Exchange",
+			"x-delayed-message",
+			true,  // Durable
+			false, // Auto-delete
+			false, // Internal
+			false, // No-wait
+			amqp.Table{"x-delayed-type": "direct"},
+		)
+		if err != nil {
 			log.Error().Err(err).Msg("Failed to declare DLX")
 			ch.Close()
 			conn.Close()
@@ -78,16 +93,31 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 		}
 		dlq, err := ch.QueueDeclare(
 			"WuzAPI_Dead_Letter_Queue",
-			true,
-			false,
-			false,
-			false,
+			true,  // Durable
+			false, // Auto-delete
+			false, // Exclusive
+			false, // No-wait
 			nil,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to declare DLQ")
 			return
 		}
+		_, err = ch.QueueDeclare(
+			"WuzAPI_Retry_Queue",
+			true,  // Durable
+			false, // Auto-delete
+			false, // Exclusive
+			false, // No-wait
+			amqp.Table{
+				"x-message-ttl":          300000,                    // ✨ 300.000ms = 5 minutos
+				"x-dead-letter-exchange": "WuzAPI_Delayed_Exchange", // ✨ Após 5 minutos, reencaminha para a fila principal
+			},
+		)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to declare Retry Queue")
+		}
+
 		err = ch.QueueBind(
 			dlq.Name,
 			"",
@@ -123,7 +153,7 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	}
 
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
-	q, err := ch.QueueDeclare(
+	qUser, err := ch.QueueDeclare(
 		queueName,
 		true,
 		false,
@@ -140,13 +170,36 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: q}, nil
+	// Associando a fila à Exchange de mensagens atrasadas
+	err = ch.QueueBind(
+		qUser.Name,
+		fmt.Sprintf("user-%d", userID), // Cada usuário terá um routingKey único
+		"WuzAPI_Delayed_Exchange",
+		false,
+		nil,
+	)
+
+	if err != nil {
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
+		ch.Close()
+		return nil, err
+	}
+
+	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: qUser}, nil
 }
 
 // Adiciona uma mensagem na fila com prioridade
 func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
-	return q.channel.Publish(
-		"",
+
+	// 	interval := userSendIntervals[userID] // Obtém o intervalo definido para o usuário
+	// if interval == 0 {
+	//     interval = 5 * time.Second // Valor padrão, caso não tenha sido configurado
+	// }
+
+	interval := 5 * time.Second // Valor padrão, caso não tenha sido configurado
+
+	err := q.channel.Publish(
+		"WuzAPI_Delayed_Exchange",
 		q.queue.Name,
 		false,
 		false,
@@ -155,8 +208,15 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
 			Priority:     priority,
 			ContentType:  "application/json",
 			Body:         []byte(message),
+			Headers: amqp.Table{
+				"x-delay": int(interval.Milliseconds()),
+			},
 		},
 	)
+	if err != nil {
+		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to enqueue message")
+	}
+	return err
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
@@ -331,12 +391,14 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	if err := json.Unmarshal(delivery.Body, &msgData); err != nil {
 		log.Error().Err(err).Msg("Failed to unmarshal message")
-		delivery.Nack(false, true)
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao tentar decodificar a mensagem")
+		delivery.Ack(false)
 		return
 	}
 
 	if msgData.RetryCount >= maxRetries {
 		log.Warn().Str("id", msgData.Id).Msg("Max retries reached, moving to DLQ")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Realizada a quantidade "+fmt.Sprintf("%d", maxRetries)+" de tentativas de envio")
 		delivery.Nack(false, false)
 		return
 	}
@@ -344,28 +406,41 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	client, exists := clientPointer[msgData.Userid]
 	if !exists || client == nil {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-		delivery.Nack(false, false)
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
+		delivery.Ack(false)
 		return
 	}
 
 	var msgProto waProto.Message
 	if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
 		log.Error().Err(err).Msg("Failed to unmarshal MsgProto")
-		delivery.Nack(false, true)
+
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao tentar decodificar a mensagem MsgProto")
+
+		delivery.Ack(false)
 		return
 	}
 
 	jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
 	if err != nil {
-		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to get valid number")
-		delivery.Nack(false, true)
+		// Dispara webhook com erro
+		errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone
+
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
+
+		delivery.Ack(false)
 		return
 	}
 
 	recipient, ok := parseJID(jid)
 	if !ok {
 		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
-		delivery.Nack(false, true)
+		// Dispara webhook com erro
+		errMsg := "Erro ao converter telefone para JID " + jid
+
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
+
+		delivery.Ack(false)
 		return
 	}
 
@@ -390,12 +465,16 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 		if err := queue.Enqueue(string(updatedMessage), delivery.Priority); err != nil {
 			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
+			sendWebhookNotification(s, msgData, time.Now().Unix(), status, "Falha ao reenfileirar mensagem")
+			delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+		} else {
+			delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
 		}
-		delivery.Ack(false)
+
 	} else {
 		timestamp = resp.Timestamp.Unix()
 		log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
-		delivery.Ack(false)
+		delivery.Ack(false) //Processada com sucesso
 	}
 
 	sendWebhookNotification(s, msgData, timestamp, status, details)
@@ -442,4 +521,84 @@ func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, st
 	} else {
 		log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
 	}
+}
+
+func StartDLQConsumer(s *server, amqpURL string) {
+	go func() {
+		queue, err := GetRabbitMQInstance(amqpURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to initialize DLQ consumer")
+			return
+		}
+
+		ch := queue.channel
+		dlqName := "WuzAPI_Dead_Letter_Queue"
+
+		msgs, err := ch.Consume(
+			dlqName,
+			"dlq-consumer",
+			false, // ✨ Não auto-ack para podermos reenviar manualmente
+			false,
+			false,
+			false,
+			nil,
+		)
+
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to consume DLQ messages")
+			return
+		}
+
+		log.Info().Msg("DLQ Consumer started, waiting for messages...")
+
+		for msg := range msgs {
+			go handleDLQMessage(s, msg, queue) // ✨ Processa cada mensagem separadamente
+		}
+	}()
+}
+
+func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
+	log.Warn().Str("message_id", string(msg.Body)).Msg("Message received from DLQ, checking retry attempts...")
+
+	var msgData MessageData
+	if err := json.Unmarshal(msg.Body, &msgData); err != nil {
+		log.Error().Err(err).Msg("Failed to unmarshal DLQ message")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao processar mensagem da DLQ")
+		msg.Ack(false) // ❌ Remove a mensagem da DLQ
+		return
+	}
+
+	// 📌 Verifica se atingiu o limite de tentativas
+	if msgData.DLQRetryCount >= maxDLQRetries {
+		log.Error().Str("id", msgData.Id).Msg("Max retry attempts reached, discarding message")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Mensagem descartada após várias tentativas")
+		msg.Ack(false) // ❌ Remove a mensagem da DLQ permanentemente
+		return
+	}
+
+	// ✨ Incrementa o número de tentativas antes de reenviar
+	msgData.DLQRetryCount++
+
+	updatedMessage, _ := json.Marshal(msgData)
+
+	err := queue.channel.Publish(
+		"WuzAPI_Delayed_Exchange", // ✅ Certifique-se de que a mensagem será processada corretamente
+		"WuzAPI_Retry_Queue",
+		false,
+		false,
+		amqp.Publishing{
+			DeliveryMode: amqp.Persistent,
+			ContentType:  "application/json",
+			Body:         updatedMessage,
+		},
+	)
+
+	if err != nil {
+		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to enqueue message in Retry Queue")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao mover mensagem para Retry Queue")
+	} else {
+		log.Info().Str("id", msgData.Id).Int("attempts", msgData.DLQRetryCount).Msg("Message moved to Retry Queue for 5 minutes")
+	}
+
+	msg.Ack(false) // ✨ Remove a mensagem da DLQ
 }

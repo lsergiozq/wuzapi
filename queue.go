@@ -312,9 +312,9 @@ func (q *RabbitMQQueue) Close() error {
 	if q.channel != nil {
 		err := q.channel.Close()
 		if err != nil {
-			log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to close channel")
-			return err
+			return nil // ✅ Ignora erros ao fechar o canal
 		}
+
 		log.Info().Str("queue", q.queue.Name).Msg("Channel closed")
 	}
 	return nil

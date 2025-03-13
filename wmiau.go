@@ -341,23 +341,23 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
-		postmap["type"] = "Message"
-		dowebhook = 0
-		metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
-		if evt.Info.Type != "" {
-			metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
-		}
-		if evt.Info.Category != "" {
-			metaParts = append(metaParts, fmt.Sprintf("category: %s", evt.Info.Category))
-		}
-		if evt.IsViewOnce {
-			metaParts = append(metaParts, "view once")
-		}
-		if evt.IsViewOnce {
-			metaParts = append(metaParts, "ephemeral")
-		}
+		// postmap["type"] = "Message"
+		// dowebhook = 0
+		// metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
+		// if evt.Info.Type != "" {
+		// 	metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
+		// }
+		// if evt.Info.Category != "" {
+		// 	metaParts = append(metaParts, fmt.Sprintf("category: %s", evt.Info.Category))
+		// }
+		// if evt.IsViewOnce {
+		// 	metaParts = append(metaParts, "view once")
+		// }
+		// if evt.IsViewOnce {
+		// 	metaParts = append(metaParts, "ephemeral")
+		// }
 
-		log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
+		// log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
 
 		// // try to get Image if any
 		// img := evt.Message.GetImageMessage()

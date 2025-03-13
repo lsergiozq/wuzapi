@@ -58,6 +58,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			log.Error().Err(err).Msg("Failed to connect to RabbitMQ")
 			return
 		}
+
 		ch, err := conn.Channel()
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to open global channel")
@@ -79,24 +80,26 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 		)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to declare DLX")
-			return // Encerra a execução corretamente
+			ch.Close()
+			conn.Close()
+			return
 		}
 
 		// 🔹 Declara Exchange para mensagens com atraso
 		err = ch.ExchangeDeclare(
 			"WuzAPI_Delayed_Exchange",
-			"direct",
+			"direct", // ✅ RabbitMQ 4.0+ NÃO suporta mais x-delayed-message
 			true,
 			false,
 			false,
 			false,
-			amqp.Table{"x-delayed-type": "direct"},
+			nil,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to declare Delayed Exchange")
 			ch.Close()
 			conn.Close()
-			return // 🔥 Garante que a execução pare aqui se falhar
+			return
 		}
 
 		// 🔹 Declara Dead Letter Queue (DLQ)
@@ -112,7 +115,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			log.Error().Err(err).Msg("Failed to declare DLQ")
 			ch.Close()
 			conn.Close()
-			return // 🔥 Encerra a execução corretamente se a DLQ falhar
+			return
 		}
 
 		// 🔹 Declara a Retry Queue
@@ -131,7 +134,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			log.Fatal().Err(err).Msg("Failed to declare Retry Queue")
 			ch.Close()
 			conn.Close()
-			return // 🔥 Encerra a função corretamente
+			return
 		}
 
 		// 🔹 Associa a DLQ ao DLX (somente se a fila foi criada com sucesso)
@@ -147,21 +150,44 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 				log.Error().Err(err).Msg("Failed to bind DLQ to DLX")
 				ch.Close()
 				conn.Close()
-				return // 🔥 Encerra a execução corretamente se falhar
+				return
 			}
 		} else {
 			log.Fatal().Msg("DLQ Name is empty, cannot bind to DLX")
 			ch.Close()
 			conn.Close()
-			return // 🔥 Para a execução se a DLQ não for criada corretamente
+			return
 		}
 
 		queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
-		log.Info().Msg("RabbitMQ instance successfully initialized") // 📌 Confirmação final
+		log.Info().Msg("RabbitMQ instance successfully initialized")
 	})
 
-	if queueInstance == nil {
-		log.Fatal().Msg("RabbitMQ connection was not established") // 🔥 Log crítico
+	// 🔹 Se a conexão caiu, tente reconectar automaticamente
+	if queueInstance == nil || queueInstance.conn == nil || queueInstance.conn.IsClosed() {
+		log.Warn().Msg("RabbitMQ connection lost, reconnecting...")
+
+		// Tenta reconectar até 3 vezes
+		for i := 1; i <= 3; i++ {
+			log.Warn().Int("attempt", i).Msg("Attempting RabbitMQ reconnection...")
+
+			conn, err := amqp.DialConfig(amqpURL, amqp.Config{Heartbeat: 10 * time.Second})
+			if err == nil {
+				ch, err := conn.Channel()
+				if err == nil {
+					queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
+					log.Info().Msg("RabbitMQ connection re-established")
+					return queueInstance, nil
+				}
+				conn.Close()
+			}
+
+			// Aguarda antes de tentar novamente
+			time.Sleep(5 * time.Second)
+		}
+
+		log.Fatal().Msg("Failed to reconnect to RabbitMQ after 3 attempts")
+		return nil, fmt.Errorf("failed to reconnect to RabbitMQ")
 	}
 
 	return queueInstance, err
@@ -173,12 +199,16 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	// Verifica se já existe um consumidor ativo
-	if consumer, exists := userConsumers[userID]; exists && consumer.queue.channel != nil {
-		log.Info().Int("userID", userID).Msg("Reusing existing queue for user")
-		return consumer.queue, nil
+	// 🔹 Verifica se a conexão com RabbitMQ ainda está ativa
+	if globalQueue.conn == nil || globalQueue.conn.IsClosed() {
+		log.Warn().Int("userID", userID).Msg("RabbitMQ connection lost, reconnecting...")
+		globalQueue, err = GetRabbitMQInstance(amqpURL)
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	// 🔹 Abre um novo canal para evitar erro "channel/connection is not open"
 	ch, err := globalQueue.conn.Channel()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
@@ -188,10 +218,10 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
 	qUser, err := ch.QueueDeclare(
 		queueName,
-		true,
-		false,
-		false,
-		false,
+		true,  // Durable
+		false, // Auto-delete
+		false, // Exclusive
+		false, // No-wait
 		amqp.Table{
 			"x-max-priority":         10,
 			"x-dead-letter-exchange": "WuzAPI_DLX",
@@ -203,17 +233,23 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		return nil, err
 	}
 
-	// Associando a fila à Exchange de mensagens atrasadas
+	// 🔹 Verifica se a fila foi criada corretamente antes de retornar
+	if qUser.Name == "" {
+		log.Error().Int("userID", userID).Msg("User queue name is empty, something went wrong")
+		ch.Close()
+		return nil, fmt.Errorf("failed to declare queue for user %d", userID)
+	}
+
+	// 🔹 Vincula a fila do usuário à `WuzAPI_Delayed_Exchange` para receber mensagens atrasadas
 	err = ch.QueueBind(
 		qUser.Name,
-		fmt.Sprintf("user-%d", userID), // Cada usuário terá um routingKey único
+		fmt.Sprintf("user-%d", userID), // Routing key específica do usuário
 		"WuzAPI_Delayed_Exchange",
 		false,
 		nil,
 	)
-
 	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to bind user queue")
 		ch.Close()
 		return nil, err
 	}

@@ -1017,7 +1017,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		if err := queue.Enqueue(string(msgData), priority); err != nil {
+		if err := queue.Enqueue(string(msgData), priority, userid); err != nil {
 			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
 			return
@@ -1958,7 +1958,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		if err := queue.Enqueue(string(msgData), priority); err != nil {
+		if err := queue.Enqueue(string(msgData), priority, userid); err != nil {
 			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
 			return

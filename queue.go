@@ -258,7 +258,7 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 }
 
 // Adiciona uma mensagem na fila com prioridade
-func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
+func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) error {
 
 	// 	interval := userSendIntervals[userID] // Obtém o intervalo definido para o usuário
 	// if interval == 0 {
@@ -269,7 +269,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8) error {
 
 	err := q.channel.Publish(
 		"WuzAPI_Delayed_Exchange",
-		q.queue.Name,
+		fmt.Sprintf("user-%d", userID), // Routing key consistente com o QueueBind
 		false,
 		false,
 		amqp.Publishing{
@@ -513,6 +513,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
+	log.Info().Str("id", msgData.Id).Str("phone", msgData.Phone).Msg("Processing message from queue")
+
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 	// Define status e detalhes do envio
@@ -532,7 +534,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			delivery.Nack(false, true)
 			return
 		}
-		if err := queue.Enqueue(string(updatedMessage), delivery.Priority); err != nil {
+		if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
 			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
 			sendWebhookNotification(s, msgData, time.Now().Unix(), status, "Falha ao reenfileirar mensagem")
 			delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar

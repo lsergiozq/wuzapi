@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -302,12 +303,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 	case *events.Connected:
-		sqlStmt := `UPDATE users SET connected=1 WHERE id=?`
-		_, err = mycli.db.Exec(sqlStmt, mycli.userID)
-		if err != nil {
-			log.Error().Err(err).Msg(sqlStmt)
-			return
-		}
+		updateUserConnected(mycli.db, mycli.userID)
 	case *events.PushNameSetting:
 		if len(mycli.WAClient.Store.PushName) == 0 {
 			return
@@ -320,12 +316,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		} else {
 			log.Info().Msg("Marked self as available")
 		}
-		sqlStmt := `UPDATE users SET connected=1 WHERE id=?`
-		_, err = mycli.db.Exec(sqlStmt, mycli.userID)
-		if err != nil {
-			log.Error().Err(err).Msg(sqlStmt)
-			return
-		}
+		updateUserConnected(mycli.db, mycli.userID)
 	case *events.PairSuccess:
 		log.Info().Str("userid", strconv.Itoa(mycli.userID)).Str("token", mycli.token).Str("ID", evt.ID.String()).Str("BusinessName", evt.BusinessName).Str("Platform", evt.Platform).Msg("QR Pair Success")
 		jid := evt.ID
@@ -602,4 +593,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			log.Warn().Str("userid", strconv.Itoa(mycli.userID)).Msg("No webhook set for user")
 		}
 	}
+}
+
+var dbMutex sync.Mutex
+
+func updateUserConnected(db *sql.DB, userID int) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+	_, err := db.Exec("UPDATE users SET connected=1 WHERE id=?", userID)
+	return err
 }

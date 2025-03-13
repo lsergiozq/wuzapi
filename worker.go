@@ -19,7 +19,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 	for {
 		select {
 		case <-cancelChan:
-			log.Info().Msg("Shutting down RabbitMQ consumer")
+			//log.Info().Msg("Shutting down RabbitMQ consumer")
 			if queue != nil {
 				queue.Close()
 			}
@@ -135,7 +135,7 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 					}
 					go callHook(webhookurl, data, msgData.Userid)
 
-					log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+					//log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
 				}
 			} else {
 				log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")

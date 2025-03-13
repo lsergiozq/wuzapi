@@ -68,7 +68,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 
 		myuserinfo, found := userinfocache.Get(token)
 		if !found {
-			log.Info().Msg("Looking for user information in DB")
+			//log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
 			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
@@ -97,7 +97,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 			}
 		} else {
 			ctx = context.WithValue(r.Context(), "userinfo", myuserinfo)
-			log.Info().Msg(myuserinfo.(Values).Get("Id"))
+			//log.Info().Msg(myuserinfo.(Values).Get("Id"))
 			userid, _ = strconv.Atoi(myuserinfo.(Values).Get("Id"))
 		}
 
@@ -129,7 +129,7 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 
 		myuserinfo, found := userinfocache.Get(token)
 		if !found {
-			log.Info().Msg("Looking for user information in DB")
+			//log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
 			rows, err := s.db.Query("SELECT id,webhook,jid,events,imagebase64 FROM users WHERE token=? LIMIT 1", token)
 			if err != nil {
@@ -222,11 +222,11 @@ func (s *server) Connect() http.HandlerFunc {
 			if err != nil {
 				log.Warn().Msg("Could not set events in users table")
 			}
-			log.Info().Str("events", eventstring).Msg("Setting subscribed events")
+			//log.Info().Str("events", eventstring).Msg("Setting subscribed events")
 			v := updateUserInfo(r.Context().Value("userinfo"), "Events", eventstring)
 			userinfocache.Set(token, v, cache.NoExpiration)
 
-			log.Info().Str("jid", jid).Msg("Attempt to connect")
+			//log.Info().Str("jid", jid).Msg("Attempt to connect")
 			killchannel[userid] = make(chan bool)
 			go s.startClient(userid, jid, token, subscribedEvents)
 
@@ -273,7 +273,7 @@ func (s *server) Disconnect() http.HandlerFunc {
 		}
 		if clientPointer[userid].IsConnected() == true {
 			if clientPointer[userid].IsLoggedIn() == true {
-				log.Info().Str("jid", jid).Msg("Disconnection successfull")
+				//log.Info().Str("jid", jid).Msg("Disconnection successfull")
 				killchannel[userid] <- true
 				_, err := s.db.Exec("UPDATE users SET events=? WHERE id=?", "", userid)
 				if err != nil {
@@ -423,7 +423,7 @@ func (s *server) GetQR() http.HandlerFunc {
 			}
 		}
 
-		log.Info().Str("userid", txtid).Str("qrcode", code).Msg("Get QR successful")
+		//log.Info().Str("userid", txtid).Str("qrcode", code).Msg("Get QR successful")
 		response := map[string]interface{}{"QRCode": fmt.Sprintf("%s", code)}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -454,7 +454,7 @@ func (s *server) Logout() http.HandlerFunc {
 					s.Respond(w, r, http.StatusInternalServerError, errors.New("Could not perform logout"))
 					return
 				} else {
-					log.Info().Str("jid", jid).Msg("Logged out")
+					//log.Info().Str("jid", jid).Msg("Logged out")
 					killchannel[userid] <- true
 				}
 			} else {
@@ -676,7 +676,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -798,7 +798,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -848,11 +848,11 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
-		log.Info().Str("txtid", txtid).Msg("Conteúdo do txtid")
+		//log.Info().Str("txtid", txtid).Msg("Conteúdo do txtid")
 
 		userid, _ := strconv.Atoi(txtid)
 
-		log.Info().Str("userid", strconv.Itoa(userid)).Msg("Conteúdo do userid")
+		//log.Info().Str("userid", strconv.Itoa(userid)).Msg("Conteúdo do userid")
 		msgid := ""
 
 		if clientPointer[userid] == nil {
@@ -1023,7 +1023,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
+		//log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 
 		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -1174,7 +1174,7 @@ func (s *server) SendImageOLD() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1292,7 +1292,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1412,7 +1412,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1506,7 +1506,7 @@ func (s *server) SendContact() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1602,7 +1602,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1708,7 +1708,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1849,7 +1849,7 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1964,7 +1964,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
+		//log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
 
 		response := map[string]interface{}{"Details": "Mensagem enfileirada", "Id": t.Id}
 		responseJson, err := json.Marshal(response)
@@ -2056,7 +2056,7 @@ func (s *server) SendMessageOLD() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -2216,7 +2216,7 @@ func (s *server) SendTemplate() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -2419,7 +2419,7 @@ func (s *server) GetAvatar() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("id", pic.ID).Str("url", pic.URL).Msg("Got avatar")
+		//log.Info().Str("id", pic.ID).Str("url", pic.URL).Msg("Got avatar")
 
 		responseJson, err := json.Marshal(pic)
 		if err != nil {
@@ -2925,7 +2925,7 @@ func (s *server) React() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		//log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -3500,7 +3500,7 @@ func (s *server) UpdateUserImage() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("token", token).Msg("Imagem do usuário atualizada com sucesso")
+		//log.Info().Str("token", token).Msg("Imagem do usuário atualizada com sucesso")
 		response := map[string]interface{}{"message": "Imagem atualizada com sucesso"}
 		responseJson, _ := json.Marshal(response)
 

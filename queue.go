@@ -43,15 +43,15 @@ var (
 	consumersMutex sync.Mutex
 )
 
-const maxRetries = 5
-const maxDLQRetries = 3
+const maxRetries = 10
+const maxDLQRetries = 10
 
 // Singleton para RabbitMQQueue
 // Inicializa a conexão global RabbitMQ
 func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 	var err error
 	once.Do(func() {
-		log.Info().Msg("Initializing RabbitMQ connection...")
+		//log.Info().Msg("Initializing RabbitMQ connection...")
 
 		conn, err := amqp.DialConfig(amqpURL, amqp.Config{Heartbeat: 10 * time.Second})
 		if err != nil {
@@ -66,7 +66,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 			return
 		}
 
-		log.Info().Msg("RabbitMQ channel opened")
+		//log.Info().Msg("RabbitMQ channel opened")
 
 		// 🔹 Declara Exchange DLX
 		err = ch.ExchangeDeclare(
@@ -160,7 +160,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 		}
 
 		queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
-		log.Info().Msg("RabbitMQ instance successfully initialized")
+		//log.Info().Msg("RabbitMQ instance successfully initialized")
 	})
 
 	// 🔹 Se a conexão caiu, tente reconectar automaticamente
@@ -176,7 +176,7 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 				ch, err := conn.Channel()
 				if err == nil {
 					queueInstance = &RabbitMQQueue{conn: conn, channel: ch}
-					log.Info().Msg("RabbitMQ connection re-established")
+					//log.Info().Msg("RabbitMQ connection re-established")
 					return queueInstance, nil
 				}
 				conn.Close()
@@ -303,7 +303,7 @@ func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 		return nil, err
 	}
 
-	log.Info().Str("queue", q.queue.Name).Msg("Waiting for messages...")
+	//log.Info().Str("queue", q.queue.Name).Msg("Waiting for messages...")
 	return deliveries, nil
 }
 
@@ -315,7 +315,7 @@ func (q *RabbitMQQueue) Close() error {
 			return nil // ✅ Ignora erros ao fechar o canal
 		}
 
-		log.Info().Str("queue", q.queue.Name).Msg("Channel closed")
+		//log.Info().Str("queue", q.queue.Name).Msg("Channel closed")
 	}
 	return nil
 }
@@ -396,7 +396,7 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan chan struct{
 						consumersMutex.Unlock()
 
 						go processUserMessages(queue, s, userID, userCancelChan)
-						log.Info().Int("userID", userID).Msg("Started consumer for user")
+						//log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
 
@@ -424,7 +424,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 		return
 	}
 
-	log.Info().Int("userID", userID).Msg("Consumer started successfully")
+	//log.Info().Int("userID", userID).Msg("Consumer started successfully")
 
 	// Adicionando o consumidor ao userConsumers
 	consumersMutex.Lock()
@@ -446,7 +446,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 			ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
 
 		case <-cancelChan:
-			log.Info().Int("userID", userID).Msg("Shutting down user consumer")
+			//log.Info().Int("userID", userID).Msg("Shutting down user consumer")
 			consumersMutex.Lock()
 			queue.Close() // Fecha o canal ao encerrar
 			delete(userConsumers, userID)
@@ -467,7 +467,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	if msgData.RetryCount >= maxRetries {
 		log.Warn().Str("id", msgData.Id).Msg("Max retries reached, moving to DLQ")
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Realizada a quantidade "+fmt.Sprintf("%d", maxRetries)+" de tentativas de envio")
+		//sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Realizada a quantidade "+fmt.Sprintf("%d", maxRetries)+" de tentativas de envio")
 		delivery.Nack(false, false)
 		return
 	}
@@ -513,7 +513,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	log.Info().Str("id", msgData.Id).Str("phone", msgData.Phone).Msg("Processing message from queue")
+	//log.Info().Str("id", msgData.Id).Str("phone", msgData.Phone).Msg("Processing message from queue")
 
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
@@ -544,7 +544,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	} else {
 		timestamp = resp.Timestamp.Unix()
-		log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
+		//log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
 		delivery.Ack(false) //Processada com sucesso
 	}
 
@@ -587,7 +587,7 @@ func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, st
 			}
 			go callHook(webhookurl, data, msgData.Userid)
 
-			log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+			//log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
 		}
 	} else {
 		log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
@@ -620,7 +620,7 @@ func StartDLQConsumer(s *server, amqpURL string) {
 			return
 		}
 
-		log.Info().Msg("DLQ Consumer started, waiting for messages...")
+		//log.Info().Msg("DLQ Consumer started, waiting for messages...")
 
 		for msg := range msgs {
 			go handleDLQMessage(s, msg, queue) // ✨ Processa cada mensagem separadamente
@@ -668,7 +668,7 @@ func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
 		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to enqueue message in Retry Queue")
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao mover mensagem para Retry Queue")
 	} else {
-		log.Info().Str("id", msgData.Id).Int("attempts", msgData.DLQRetryCount).Msg("Message moved to Retry Queue for 5 minutes")
+		//log.Info().Str("id", msgData.Id).Int("attempts", msgData.DLQRetryCount).Msg("Message moved to Retry Queue for 5 minutes")
 	}
 
 	msg.Ack(false) // ✨ Remove a mensagem da DLQ

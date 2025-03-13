@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strconv"
 )
 
 func Find(slice []string, val string) bool {
@@ -23,7 +22,7 @@ func updateUserInfo(values interface{}, field string, value string) interface{} 
 
 // webhook for regular messages
 func callHook(myurl string, payload map[string]string, id int) {
-	log.Info().Str("url", myurl).Msg("Sending POST to client " + strconv.Itoa(id))
+	//log.Info().Str("url", myurl).Msg("Sending POST to client " + strconv.Itoa(id))
 
 	// Log the payload map
 	//log.Debug().Msg("Payload:")
@@ -39,9 +38,9 @@ func callHook(myurl string, payload map[string]string, id int) {
 
 // webhook for messages with file attachments
 func callHookFile(myurl string, payload map[string]string, id int, file string) error {
-	log.Info().Str("file", file).Str("url", myurl).Msg("Sending POST")
+	//log.Info().Str("file", file).Str("url", myurl).Msg("Sending POST")
 
-	resp, err := clientHttp[id].R().
+	_, err := clientHttp[id].R().
 		SetFiles(map[string]string{
 			"file": file,
 		}).
@@ -54,7 +53,7 @@ func callHookFile(myurl string, payload map[string]string, id int, file string) 
 	}
 
 	// Optionally, you can log the response status
-	log.Info().Int("status", resp.StatusCode()).Msg("POST request completed")
+	//log.Info().Int("status", resp.StatusCode()).Msg("POST request completed")
 
 	return nil
 }

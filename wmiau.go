@@ -68,7 +68,7 @@ func (s *server) connectOnStartup() {
 			log.Error().Err(err).Msg("DB Problem")
 			return
 		} else {
-			log.Info().Str("token", token).Msg("Connect to Whatsapp on startup")
+			//log.Info().Str("token", token).Msg("Connect to Whatsapp on startup")
 			v := Values{map[string]string{
 				"Id":          txtid,
 				"Jid":         jid,
@@ -99,8 +99,8 @@ func (s *server) connectOnStartup() {
 					}
 				}
 			}
-			eventstring := strings.Join(subscribedEvents, ",")
-			log.Info().Str("events", eventstring).Str("jid", jid).Msg("Attempt to connect")
+			//eventstring := strings.Join(subscribedEvents, ",")
+			//log.Info().Str("events", eventstring).Str("jid", jid).Msg("Attempt to connect")
 			killchannel[userid] = make(chan bool)
 			go s.startClient(userid, jid, token, subscribedEvents)
 		}
@@ -132,7 +132,7 @@ func parseJID(arg string) (types.JID, bool) {
 
 func (s *server) startClient(userID int, textjid string, token string, subscriptions []string) {
 
-	log.Info().Str("userid", strconv.Itoa(userID)).Str("jid", textjid).Msg("Starting websocket connection to Whatsapp")
+	//log.Info().Str("userid", strconv.Itoa(userID)).Str("jid", textjid).Msg("Starting websocket connection to Whatsapp")
 
 	var deviceStore *store.Device
 	var err error
@@ -237,7 +237,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 					delete(clientPointer, userID)
 					killchannel[userID] <- true
 				} else if evt.Event == "success" {
-					log.Info().Msg("QR pairing ok!")
+					//log.Info().Msg("QR pairing ok!")
 					// Clear QR code after pairing
 					sqlStmt := `UPDATE users SET qrcode=? WHERE id=?`
 					_, err := s.db.Exec(sqlStmt, "", userID)
@@ -245,14 +245,14 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 						log.Error().Err(err).Msg(sqlStmt)
 					}
 				} else {
-					log.Info().Str("event", evt.Event).Msg("Login event")
+					//log.Info().Str("event", evt.Event).Msg("Login event")
 				}
 			}
 		}
 
 	} else {
 		// Already logged in, just connect
-		log.Info().Msg("Already logged in, just connect")
+		//log.Info().Msg("Already logged in, just connect")
 		err = client.Connect()
 		if err != nil {
 			panic(err)
@@ -263,7 +263,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 	for {
 		select {
 		case <-killchannel[userID]:
-			log.Info().Str("userid", strconv.Itoa(userID)).Msg("Received kill signal")
+			//log.Info().Str("userid", strconv.Itoa(userID)).Msg("Received kill signal")
 			client.Disconnect()
 			delete(clientPointer, userID)
 			sqlStmt := `UPDATE users SET connected=0 WHERE id=?`
@@ -274,7 +274,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 			return
 		default:
 			time.Sleep(1000 * time.Millisecond)
-			//log.Info().Str("jid",textjid).Msg("Loop the loop")
+			////log.Info().Str("jid",textjid).Msg("Loop the loop")
 		}
 	}
 }
@@ -299,7 +299,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			if err != nil {
 				log.Warn().Err(err).Msg("Failed to send available presence")
 			} else {
-				log.Info().Msg("Marked self as available")
+				//log.Info().Msg("Marked self as available")
 			}
 		}
 	case *events.Connected:
@@ -314,11 +314,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if err != nil {
 			log.Warn().Err(err).Msg("Failed to send available presence")
 		} else {
-			log.Info().Msg("Marked self as available")
+			//log.Info().Msg("Marked self as available")
 		}
 		updateUserConnected(mycli.db, mycli.userID)
 	case *events.PairSuccess:
-		log.Info().Str("userid", strconv.Itoa(mycli.userID)).Str("token", mycli.token).Str("ID", evt.ID.String()).Str("BusinessName", evt.BusinessName).Str("Platform", evt.Platform).Msg("QR Pair Success")
+		//log.Info().Str("userid", strconv.Itoa(mycli.userID)).Str("token", mycli.token).Str("ID", evt.ID.String()).Str("BusinessName", evt.BusinessName).Str("Platform", evt.Platform).Msg("QR Pair Success")
 		jid := evt.ID
 		sqlStmt := `UPDATE users SET jid=? WHERE id=?`
 		_, err := mycli.db.Exec(sqlStmt, jid, mycli.userID)
@@ -331,14 +331,14 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if !found {
 			log.Warn().Msg("No user info cached on pairing?")
 		} else {
-			txtid := myuserinfo.(Values).Get("Id")
+			//txtid := myuserinfo.(Values).Get("Id")
 			token := myuserinfo.(Values).Get("Token")
 			v := updateUserInfo(myuserinfo, "Jid", fmt.Sprintf("%s", jid))
 			userinfocache.Set(token, v, cache.NoExpiration)
-			log.Info().Str("jid", jid.String()).Str("userid", txtid).Str("token", token).Msg("User information set")
+			//log.Info().Str("jid", jid.String()).Str("userid", txtid).Str("token", token).Msg("User information set")
 		}
 	case *events.StreamReplaced:
-		log.Info().Msg("Received StreamReplaced event")
+		//log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
 		// postmap["type"] = "Message"
@@ -357,7 +357,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// 	metaParts = append(metaParts, "ephemeral")
 		// }
 
-		// log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
+		// //log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
 
 		// // try to get Image if any
 		// img := evt.Message.GetImageMessage()
@@ -386,7 +386,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// 		log.Error().Err(err).Msg("Failed to save image")
 		// 		return
 		// 	}
-		// 	log.Info().Str("path", path).Msg("Image saved")
+		// 	//log.Info().Str("path", path).Msg("Image saved")
 		// }
 
 		// //try to get Audio if any
@@ -422,7 +422,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// 		log.Error().Err(err).Msg("Failed to save audio")
 		// 		return
 		// 	}
-		// 	log.Info().Str("path", path).Msg("Audio saved")
+		// 	//log.Info().Str("path", path).Msg("Audio saved")
 		// }
 
 		// //try to get Document if any
@@ -459,13 +459,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// 		log.Error().Err(err).Msg("Failed to save document")
 		// 		return
 		// 	}
-		// 	log.Info().Str("path", path).Msg("Document saved")
+		// 	//log.Info().Str("path", path).Msg("Document saved")
 		// }
 	case *events.Receipt:
 		postmap["type"] = "ReadReceipt"
 		dowebhook = 0
 		if evt.Type == events.ReceiptTypeRead || evt.Type == events.ReceiptTypeReadSelf {
-			log.Info().Strs("id", evt.MessageIDs).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%d", evt.Timestamp)).Msg("Message was read")
+			//log.Info().Strs("id", evt.MessageIDs).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%d", evt.Timestamp)).Msg("Message was read")
 			if evt.Type == events.ReceiptTypeRead {
 				postmap["state"] = "Read"
 			} else {
@@ -473,7 +473,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		} else if evt.Type == events.ReceiptTypeDelivered {
 			postmap["state"] = "Delivered"
-			log.Info().Str("id", evt.MessageIDs[0]).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%d", evt.Timestamp)).Msg("Message delivered")
+			//log.Info().Str("id", evt.MessageIDs[0]).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%d", evt.Timestamp)).Msg("Message delivered")
 		} else {
 			// Discard webhooks for inactive or other delivery types
 			return
@@ -484,13 +484,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if evt.Unavailable {
 			postmap["state"] = "offline"
 			if evt.LastSeen.IsZero() {
-				log.Info().Str("from", evt.From.String()).Msg("User is now offline")
+				//log.Info().Str("from", evt.From.String()).Msg("User is now offline")
 			} else {
-				log.Info().Str("from", evt.From.String()).Str("lastSeen", fmt.Sprintf("%d", evt.LastSeen)).Msg("User is now offline")
+				//log.Info().Str("from", evt.From.String()).Str("lastSeen", fmt.Sprintf("%d", evt.LastSeen)).Msg("User is now offline")
 			}
 		} else {
 			postmap["state"] = "online"
-			log.Info().Str("from", evt.From.String()).Msg("User is now online")
+			//log.Info().Str("from", evt.From.String()).Msg("User is now online")
 		}
 	case *events.HistorySync:
 		postmap["type"] = "HistorySync"
@@ -521,12 +521,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			log.Error().Err(err).Msg("Failed to write history sync")
 			return
 		}
-		log.Info().Str("filename", fileName).Msg("Wrote history sync")
+		//log.Info().Str("filename", fileName).Msg("Wrote history sync")
 		_ = file.Close()
 	case *events.AppState:
-		log.Info().Str("index", fmt.Sprintf("%+v", evt.Index)).Str("actionValue", fmt.Sprintf("%+v", evt.SyncActionValue)).Msg("App state event received")
+		//log.Info().Str("index", fmt.Sprintf("%+v", evt.Index)).Str("actionValue", fmt.Sprintf("%+v", evt.SyncActionValue)).Msg("App state event received")
 	case *events.LoggedOut:
-		log.Info().Str("reason", evt.Reason.String()).Msg("Logged out")
+		//log.Info().Str("reason", evt.Reason.String()).Msg("Logged out")
 		killchannel[mycli.userID] <- true
 		sqlStmt := `UPDATE users SET connected=0 WHERE id=?`
 		_, err := mycli.db.Exec(sqlStmt, mycli.userID)
@@ -537,19 +537,19 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.ChatPresence:
 		postmap["type"] = "ChatPresence"
 		dowebhook = 0
-		log.Info().Str("state", fmt.Sprintf("%s", evt.State)).Str("media", fmt.Sprintf("%s", evt.Media)).Str("chat", evt.MessageSource.Chat.String()).Str("sender", evt.MessageSource.Sender.String()).Msg("Chat Presence received")
+		//log.Info().Str("state", fmt.Sprintf("%s", evt.State)).Str("media", fmt.Sprintf("%s", evt.Media)).Str("chat", evt.MessageSource.Chat.String()).Str("sender", evt.MessageSource.Sender.String()).Msg("Chat Presence received")
 	case *events.CallOffer:
-		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call offer")
+		//log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call offer")
 	case *events.CallAccept:
-		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call accept")
+		//log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call accept")
 	case *events.CallTerminate:
-		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call terminate")
+		//log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call terminate")
 	case *events.CallOfferNotice:
-		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call offer notice")
+		//log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call offer notice")
 	case *events.CallRelayLatency:
-		log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call relay latency")
+		//log.Info().Str("event", fmt.Sprintf("%+v", evt)).Msg("Got call relay latency")
 	default:
-		log.Warn().Str("event", fmt.Sprintf("%+v", evt)).Msg("Unhandled event")
+		//log.Warn().Str("event", fmt.Sprintf("%+v", evt)).Msg("Unhandled event")
 	}
 
 	if dowebhook == 1 {
@@ -568,7 +568,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		if webhookurl != "" {
-			log.Info().Str("url", webhookurl).Msg("Calling webhook")
+			//log.Info().Str("url", webhookurl).Msg("Calling webhook")
 			values, _ := json.Marshal(postmap)
 			data := map[string]string{
 				"jsonData": string(values),

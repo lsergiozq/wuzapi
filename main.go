@@ -150,7 +150,7 @@ func main() {
 		}
 	}()
 	//wlog.Infof("Server Started. Listening on %s:%s", *address, *port)
-	log.Info().Str("address", *address).Str("port", *port).Msg("Server Started")
+	//log.Info().Str("address", *address).Str("port", *port).Msg("Server Started")
 
 	// Conectar ao RabbitMQ
 	rabbitMQURL := getRabbitMQURL()
@@ -160,7 +160,7 @@ func main() {
 		return
 	}
 
-	log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
+	//log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
 	cancelChan := make(chan struct{})
 	StartUserConsumers(s, rabbitMQURL, cancelChan)
 
@@ -168,12 +168,12 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
-	log.Info().Msg("Shutting down wuzapi...")
+	//log.Info().Msg("Shutting down wuzapi...")
 	// No encerramento, feche o canal para sinalizar o término
 	close(cancelChan)
 
 	<-done
-	log.Info().Msg("Server Stoped")
+	//log.Info().Msg("Server Stoped")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer func() {
@@ -185,7 +185,7 @@ func main() {
 		log.Error().Str("error", fmt.Sprintf("%+v", err)).Msg("Server Shutdown Failed")
 		os.Exit(1)
 	}
-	log.Info().Msg("Server Exited Properly")
+	//log.Info().Msg("Server Exited Properly")
 
 }
 

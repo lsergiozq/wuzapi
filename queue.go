@@ -513,8 +513,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	//log.Info().Str("id", msgData.Id).Str("phone", msgData.Phone).Msg("Processing message from queue")
-
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 	// Define status e detalhes do envio
@@ -529,7 +527,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
 
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
-		if strings.Contains(err.Error(), "server returned error 479") {
+		if strings.Contains(err.Error(), "479") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			s.DisconnectUser(msgData.Userid)
 			//tempo para reconectar de 2 segundos

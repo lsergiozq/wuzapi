@@ -527,6 +527,16 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		details = err.Error()
 
 		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
+
+		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
+		if strings.Contains(err.Error(), "server returned error 479") {
+			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
+			s.DisconnectUser(msgData.Userid)
+			//tempo para reconectar de 2 segundos
+			time.Sleep(2 * time.Second)
+			s.ConnectUser(msgData.Userid)
+		}
+
 		msgData.RetryCount++
 		updatedMessage, err := json.Marshal(msgData)
 		if err != nil {

@@ -170,136 +170,157 @@ func (s *server) auth(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 // Connects to Whatsapp Servers
+// Connect handles the HTTP request and response
 func (s *server) Connect() http.HandlerFunc {
-
-	type connectStruct struct {
-		Subscribe []string
-		Immediate bool
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
-		webhook := r.Context().Value("userinfo").(Values).Get("Webhook")
-		jid := r.Context().Value("userinfo").(Values).Get("Jid")
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		jid := r.Context().Value("userinfo").(Values).Get("Jid")
+		webhook := r.Context().Value("userinfo").(Values).Get("Webhook")
 		token := r.Context().Value("userinfo").(Values).Get("Token")
-
 		userid, _ := strconv.Atoi(txtid)
-		eventstring := ""
 
-		// Decodes request BODY looking for events to subscribe
 		decoder := json.NewDecoder(r.Body)
-		var t connectStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		var t struct {
+			Subscribe []string
+			Immediate bool
+		}
+		if err := decoder.Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("Could not decode Payload"))
 			return
 		}
 
-		if clientPointer[userid] != nil && clientPointer[userid].IsLoggedIn() && clientPointer[userid].IsConnected() {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Already Connected"))
+		err := s.ConnectUserCore(userid, jid, token, t.Subscribe, t.Immediate)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
-		} else {
-
-			var subscribedEvents []string
-			if len(t.Subscribe) < 1 {
-				if !Find(subscribedEvents, "All") {
-					subscribedEvents = append(subscribedEvents, "All")
-				}
-			} else {
-				for _, arg := range t.Subscribe {
-					if !Find(messageTypes, arg) {
-						log.Warn().Str("Type", arg).Msg("Message type discarded")
-						continue
-					}
-					if !Find(subscribedEvents, arg) {
-						subscribedEvents = append(subscribedEvents, arg)
-					}
-				}
-			}
-			eventstring = strings.Join(subscribedEvents, ",")
-			_, err = s.db.Exec("UPDATE users SET events=? WHERE id=? and events<>'CallBack'", eventstring, userid)
-			if err != nil {
-				log.Warn().Msg("Could not set events in users table")
-			}
-			//log.Info().Str("events", eventstring).Msg("Setting subscribed events")
-			v := updateUserInfo(r.Context().Value("userinfo"), "Events", eventstring)
-			userinfocache.Set(token, v, cache.NoExpiration)
-
-			//log.Info().Str("jid", jid).Msg("Attempt to connect")
-			killchannel[userid] = make(chan bool)
-			go s.startClient(userid, jid, token, subscribedEvents)
-
-			if t.Immediate == false {
-				log.Warn().Msg("Waiting 10 seconds")
-				time.Sleep(10000 * time.Millisecond)
-
-				if clientPointer[userid] != nil {
-					if !clientPointer[userid].IsConnected() {
-						s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to Connect"))
-						return
-					}
-				} else {
-					s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to Connect"))
-					return
-				}
-			}
 		}
+
+		eventstring := strings.Join(t.Subscribe, ",")
+		v := updateUserInfo(r.Context().Value("userinfo"), "Events", eventstring)
+		userinfocache.Set(token, v, cache.NoExpiration)
 
 		response := map[string]interface{}{"webhook": webhook, "jid": jid, "events": eventstring, "details": "Connected!"}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-			return
 		}
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
+func (s *server) ConnectUser(userid int) error {
+	txtid := fmt.Sprintf("%d", userid)
+	userinfo, found := userinfocache.Get(txtid) // Fallback if token isn’t available
+	if !found {
+		return errors.New("User info not found in cache")
+	}
+	jid := userinfo.(Values).Get("Jid")
+	token := userinfo.(Values).Get("Token")
+	subscribe := strings.Split(userinfo.(Values).Get("Events"), ",")
+	if len(subscribe) == 0 || (len(subscribe) == 1 && subscribe[0] == "") {
+		subscribe = []string{"All"}
+	}
+	return s.ConnectUserCore(userid, jid, token, subscribe, false)
+}
+
+// ConnectUserCore handles the core connection logic
+func (s *server) ConnectUserCore(userid int, jid, token string, subscribe []string, immediate bool) error {
+	if clientPointer[userid] != nil && clientPointer[userid].IsLoggedIn() && clientPointer[userid].IsConnected() {
+		return errors.New("Already Connected")
+	}
+
+	var subscribedEvents []string
+	if len(subscribe) < 1 {
+		if !Find(subscribedEvents, "All") {
+			subscribedEvents = append(subscribedEvents, "All")
+		}
+	} else {
+		for _, arg := range subscribe {
+			if !Find(messageTypes, arg) {
+				log.Warn().Str("Type", arg).Msg("Message type discarded")
+				continue
+			}
+			if !Find(subscribedEvents, arg) {
+				subscribedEvents = append(subscribedEvents, arg)
+			}
+		}
+	}
+
+	eventstring := strings.Join(subscribedEvents, ",")
+	_, err := s.db.Exec("UPDATE users SET events=? WHERE id=? AND events<>'CallBack'", eventstring, userid)
+	if err != nil {
+		log.Warn().Msg("Could not set events in users table")
+	}
+
+	killchannel[userid] = make(chan bool)
+	go s.startClient(userid, jid, token, subscribedEvents)
+
+	if !immediate {
+		log.Warn().Msg("Waiting 10 seconds")
+		time.Sleep(10 * time.Second)
+		if clientPointer[userid] == nil || !clientPointer[userid].IsConnected() {
+			return errors.New("Failed to Connect")
+		}
+	}
+	return nil
+}
+
 // Disconnects from Whatsapp websocket, does not log out device
+// DisconnectUserCore handles the core disconnection logic for a given userid
+func (s *server) DisconnectUserCore(userid int) error {
+	if clientPointer[userid] == nil {
+		return errors.New("No session")
+	}
+	if !clientPointer[userid].IsConnected() {
+		return errors.New("Cannot disconnect because it is not connected")
+	}
+	if !clientPointer[userid].IsLoggedIn() {
+		return errors.New("Cannot disconnect because it is not logged in")
+	}
+
+	killchannel[userid] <- true
+	_, err := s.db.Exec("UPDATE users SET events=? WHERE id=?", "", userid)
+	if err != nil {
+		log.Warn().Int("userid", userid).Msg("Could not set events in users table")
+	}
+	log.Info().Int("userid", userid).Msg("Disconnection successful")
+	return nil
+}
+
+// DisconnectUser wraps DisconnectUserCore with additional context handling
+func (s *server) DisconnectUser(userid int) error {
+	err := s.DisconnectUserCore(userid)
+	if err != nil {
+		log.Warn().Int("userid", userid).Msg(err.Error())
+		return err
+	}
+	return nil
+}
+
+// Disconnect handles the HTTP request and response
 func (s *server) Disconnect() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		jid := r.Context().Value("userinfo").(Values).Get("Jid")
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userid, _ := strconv.Atoi(txtid)
 
-		if clientPointer[userid] == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("No session"))
+		err := s.DisconnectUser(userid)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
 		}
-		if clientPointer[userid].IsConnected() == true {
-			if clientPointer[userid].IsLoggedIn() == true {
-				//log.Info().Str("jid", jid).Msg("Disconnection successfull")
-				killchannel[userid] <- true
-				_, err := s.db.Exec("UPDATE users SET events=? WHERE id=?", "", userid)
-				if err != nil {
-					log.Warn().Str("userid", txtid).Msg("Could not set events in users table")
-				}
-				v := updateUserInfo(r.Context().Value("userinfo"), "Events", "")
-				userinfocache.Set(token, v, cache.NoExpiration)
 
-				response := map[string]interface{}{"Details": "Disconnected"}
-				responseJson, err := json.Marshal(response)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, err)
-				} else {
-					s.Respond(w, r, http.StatusOK, string(responseJson))
-				}
-				return
-			} else {
-				log.Warn().Str("jid", jid).Msg("Ignoring disconnect as it was not connected")
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Cannot disconnect because it is not logged in"))
-				return
-			}
-		} else {
-			log.Warn().Str("jid", jid).Msg("Ignoring disconnect as it was not connected")
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Cannot disconnect because it is not logged in"))
+		v := updateUserInfo(r.Context().Value("userinfo"), "Events", "")
+		userinfocache.Set(token, v, cache.NoExpiration)
+
+		response := map[string]interface{}{"Details": "Disconnected"}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
 		}
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 

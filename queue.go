@@ -44,7 +44,7 @@ var (
 )
 
 const maxRetries = 10
-const maxDLQRetries = 10
+const maxDLQRetries = 1
 
 // Singleton para RabbitMQQueue
 // Inicializa a conexão global RabbitMQ
@@ -657,6 +657,7 @@ func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
 
 	// ✨ Incrementa o número de tentativas antes de reenviar
 	msgData.DLQRetryCount++
+	msgData.RetryCount = 0 // ✅ Reseta o contador de tentativas
 
 	updatedMessage, _ := json.Marshal(msgData)
 

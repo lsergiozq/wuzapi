@@ -162,7 +162,10 @@ func main() {
 
 	//log.Info().Msg("Worker de mensagens iniciado com RabbitMQ...")
 	cancelChan := make(chan struct{})
+
 	StartUserConsumers(s, rabbitMQURL, cancelChan)
+
+	StartDLQConsumer(s, rabbitMQURL)
 
 	// Aguarda sinais para encerrar (ex.: SIGINT, SIGTERM)
 	sigChan := make(chan os.Signal, 1)

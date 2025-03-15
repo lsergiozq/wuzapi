@@ -210,6 +210,10 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 			if err != nil {
 				panic(err)
 			}
+
+			dbMutex.Lock()
+			defer dbMutex.Unlock()
+
 			for evt := range qrChan {
 				if evt.Event == "code" {
 					// Display QR code in terminal (useful for testing/developing)
@@ -266,6 +270,8 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 			client.Disconnect()
 			delete(clientPointer, userID)
 			sqlStmt := `UPDATE users SET connected=0 WHERE id=?`
+			dbMutex.Lock()
+			defer dbMutex.Unlock()
 			_, err := s.db.Exec(sqlStmt, userID)
 			if err != nil {
 				log.Error().Err(err).Msg(sqlStmt)
@@ -320,6 +326,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		//log.Info().Str("userid", strconv.Itoa(mycli.userID)).Str("token", mycli.token).Str("ID", evt.ID.String()).Str("BusinessName", evt.BusinessName).Str("Platform", evt.Platform).Msg("QR Pair Success")
 		jid := evt.ID
 		sqlStmt := `UPDATE users SET jid=? WHERE id=?`
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		_, err := mycli.db.Exec(sqlStmt, jid, mycli.userID)
 		if err != nil {
 			log.Error().Err(err).Msg(sqlStmt)
@@ -528,6 +536,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		//log.Info().Str("reason", evt.Reason.String()).Msg("Logged out")
 		killchannel[mycli.userID] <- true
 		sqlStmt := `UPDATE users SET connected=0 WHERE id=?`
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		_, err := mycli.db.Exec(sqlStmt, mycli.userID)
 		if err != nil {
 			log.Error().Err(err).Msg(sqlStmt)

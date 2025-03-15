@@ -370,6 +370,8 @@ func (s *server) SetWebhook() http.HandlerFunc {
 		}
 		var webhook = t.WebhookURL
 
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		_, err = s.db.Exec("UPDATE users SET webhook=? WHERE id=?", webhook, userid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("%s", err)))
@@ -3494,6 +3496,8 @@ func (s *server) UpdateUserImage() http.HandlerFunc {
 			return
 		}
 
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		// Atualiza a imagem no banco de dados pelo token
 		result, err := s.db.Exec("UPDATE users SET imagebase64 = ? WHERE id = ?", requestData.ImageBase64, userid)
 		if err != nil {

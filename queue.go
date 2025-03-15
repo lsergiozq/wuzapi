@@ -531,8 +531,10 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			s.DisconnectUser(msgData.Userid)
 			//tempo para reconectar de 2 segundos
-			time.Sleep(2 * time.Second)
+			time.Sleep(10 * time.Second)
 			s.ConnectUser(msgData.Userid)
+			clientPointer[msgData.Userid].IsConnected()
+			clientPointer[msgData.Userid].IsLoggedIn()
 		}
 
 		msgData.RetryCount++
@@ -568,35 +570,30 @@ func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, st
 	}
 
 	if webhookurl != "" {
-		events := strings.Split(myuserinfo.(Values).Get("Events"), ",")
 
-		// Após o envio, verificar se o webhook deve ser chamado
-		if !Find(events, "CallBack") && !Find(events, "All") {
-			log.Warn().Msg("Usuário não está inscrito para CallBack. Ignorando webhook.")
-		} else {
-			// Criar estrutura de evento no mesmo formato do wmiau.go
-			postmap := map[string]interface{}{
-				"type": "CallBack",
-				"event": map[string]interface{}{
-					"id":        msgData.Id,
-					"phone":     msgData.Phone,
-					"status":    status,
-					"details":   details,
-					"timestamp": timestamp,
-				},
-			}
-
-			// Enviar para o webhook
-
-			values, _ := json.Marshal(postmap)
-			data := map[string]string{
-				"jsonData": string(values),
-				"token":    myuserinfo.(Values).Get("Token"),
-			}
-			go callHook(webhookurl, data, msgData.Userid)
-
-			//log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+		// Criar estrutura de evento no mesmo formato do wmiau.go
+		postmap := map[string]interface{}{
+			"type": "CallBack",
+			"event": map[string]interface{}{
+				"id":        msgData.Id,
+				"phone":     msgData.Phone,
+				"status":    status,
+				"details":   details,
+				"timestamp": timestamp,
+			},
 		}
+
+		// Enviar para o webhook
+
+		values, _ := json.Marshal(postmap)
+		data := map[string]string{
+			"jsonData": string(values),
+			"token":    myuserinfo.(Values).Get("Token"),
+		}
+		go callHook(webhookurl, data, msgData.Userid)
+
+		//log.Info().Str("id", msgData.Id).Str("status", status).Msg("CallBack processado")
+
 	} else {
 		log.Warn().Str("userid", fmt.Sprintf("%d", msgData.Userid)).Msg("Nenhum webhook configurado para este usuário")
 	}

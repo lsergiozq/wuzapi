@@ -292,7 +292,6 @@ func (s *server) DisconnectUser(userid int) error {
 func (s *server) Disconnect() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userid, _ := strconv.Atoi(txtid)
 
 		err := s.DisconnectUser(userid)
@@ -300,9 +299,6 @@ func (s *server) Disconnect() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
 		}
-
-		v := updateUserInfo(r.Context().Value("userinfo"), "Events", "")
-		userinfocache.Set(token, v, cache.NoExpiration)
 
 		response := map[string]interface{}{"Details": "Disconnected"}
 		responseJson, err := json.Marshal(response)

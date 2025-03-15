@@ -247,12 +247,6 @@ func (s *server) ConnectUserCore(userid int, jid, token string, subscribe []stri
 		}
 	}
 
-	eventstring := strings.Join(subscribedEvents, ",")
-	_, err := s.db.Exec("UPDATE users SET events=? WHERE id=? AND events<>'CallBack'", eventstring, userid)
-	if err != nil {
-		log.Warn().Msg("Could not set events in users table")
-	}
-
 	killchannel[userid] = make(chan bool)
 	go s.startClient(userid, jid, token, subscribedEvents)
 
@@ -280,10 +274,6 @@ func (s *server) DisconnectUserCore(userid int) error {
 	}
 
 	killchannel[userid] <- true
-	_, err := s.db.Exec("UPDATE users SET events=? WHERE id=?", "", userid)
-	if err != nil {
-		log.Warn().Int("userid", userid).Msg("Could not set events in users table")
-	}
 	log.Info().Int("userid", userid).Msg("Disconnection successful")
 	return nil
 }

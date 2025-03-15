@@ -522,8 +522,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	log.Info().Str("jid", jid).Msg("Número de telefone validado com sucesso")
-
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 	// Define status e detalhes do envio

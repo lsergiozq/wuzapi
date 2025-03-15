@@ -348,8 +348,6 @@ func GetValidNumber(userid int, phone string) (string, error) {
 	// Extrai o JID do primeiro item (ou todos se preferir concatenar)``
 	jid := resp[0].JID.User + "@" + resp[0].JID.Server
 
-	log.Info().Str("jid", jid).Str("phone", phone).Msg("Número de telefone validado com sucesso")
-
 	// Retorna o JID formatado
 	return jid, nil
 }
@@ -514,6 +512,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		delivery.Ack(false)
 		return
 	}
+
+	log.Info().Str("jid", jid).Msg("Número de telefone validado com sucesso")
 
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 

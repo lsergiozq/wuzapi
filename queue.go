@@ -338,6 +338,10 @@ func GetValidNumber(userid int, phone string) (string, error) {
 	resp, err := clientPointer[userid].IsOnWhatsApp(phones)
 
 	if err != nil {
+		log.Error().Str("Phone", phone).Err(err).Msg("Failed to check if phone number is on WhatsApp")
+	}
+
+	if len(resp) == 0 && len(phone) == 13 {
 		//tenta retirando o 9 do telefone da posicao 5. de 5591993275712 para 551993275712
 		phone = phone[:4] + phone[5:]
 		phones := []string{phone}
@@ -346,6 +350,7 @@ func GetValidNumber(userid int, phone string) (string, error) {
 
 	// Verifica se a resposta está vazia
 	if len(resp) == 0 {
+		// Retorna um erro se o número não foi encontrado
 		return "", errors.New("número de telefone não encontrado no WhatsApp")
 	}
 

@@ -348,6 +348,8 @@ func GetValidNumber(userid int, phone string) (string, error) {
 	// Extrai o JID do primeiro item (ou todos se preferir concatenar)``
 	jid := resp[0].JID.User + "@" + resp[0].JID.Server
 
+	log.Info().Str("jid", jid).Str("phone", phone).Msg("Número de telefone validado com sucesso")
+
 	// Retorna o JID formatado
 	return jid, nil
 }
@@ -529,12 +531,12 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
 		if strings.Contains(err.Error(), "479") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
-			s.DisconnectUser(msgData.Userid)
+			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 2 segundos
 			time.Sleep(10 * time.Second)
-			s.ConnectUser(msgData.Userid)
 			clientPointer[msgData.Userid].IsConnected()
 			clientPointer[msgData.Userid].IsLoggedIn()
+			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
 		}
 
 		msgData.RetryCount++

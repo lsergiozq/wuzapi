@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/mdp/qrterminal/v3"
 	"github.com/patrickmn/go-cache"
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
@@ -215,8 +214,8 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 				if evt.Event == "code" {
 					// Display QR code in terminal (useful for testing/developing)
 					if *logType != "json" {
-						qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-						fmt.Println("QR code:\n", evt.Code)
+						//qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+						//fmt.Println("QR code:\n", evt.Code)
 					}
 					// Store encoded/embeded base64 QR on database for retrieval with the /qr endpoint
 					image, _ := qrcode.Encode(evt.Code, qrcode.Medium, 256)
@@ -233,7 +232,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 					if err != nil {
 						log.Error().Err(err).Msg(sqlStmt)
 					}
-					log.Warn().Msg("QR timeout killing channel")
+					//log.Warn().Msg("QR timeout killing channel")
 					delete(clientPointer, userID)
 					killchannel[userID] <- true
 				} else if evt.Event == "success" {

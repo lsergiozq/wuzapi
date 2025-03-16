@@ -265,6 +265,8 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 	//     interval = 5 * time.Second // Valor padrão, caso não tenha sido configurado
 	// }
 
+	q.channel.Qos(1, 0, false) // Cada consumidor pega apenas uma mensagem por vez
+
 	interval := 5 * time.Second // Valor padrão, caso não tenha sido configurado
 
 	err := q.channel.Publish(
@@ -289,6 +291,9 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
+
+	q.channel.Qos(1, 0, false) // Cada consumidor pega apenas uma mensagem por vez
+
 	deliveries, err := q.channel.Consume(
 		q.queue.Name,
 		fmt.Sprintf("consumer-%d", time.Now().UnixNano()),
@@ -412,7 +417,7 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan chan struct{
 				// Remover consumidores inativos sem bloquear o mutex por muito tempo
 				for userID, consumer := range userConsumers {
 					if !activeUsers[userID] {
-						log.Warn().Int("userID", userID).Msg("Closing inactive consumer")
+						//log.Warn().Int("userID", userID).Msg("Closing inactive consumer")
 						close(consumer.cancelChan)
 
 						consumersMutex.Lock()

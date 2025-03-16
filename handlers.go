@@ -1026,11 +1026,12 @@ func (s *server) SendImage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		if err := queue.Enqueue(string(msgData), priority, userid); err != nil {
-			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
-			return
-		}
+		go func() {
+			err := queue.Enqueue(string(msgData), priority, userid)
+			if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
+				log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
+			}
+		}()
 
 		//log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 

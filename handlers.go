@@ -858,14 +858,6 @@ func (s *server) SendImage() http.HandlerFunc {
 		userid, _ := strconv.Atoi(txtid)
 		msgid := ""
 
-		var clientPointerLock sync.RWMutex
-		client := clientPointer[userid]
-		clientPointerLock.RUnlock()
-		if client == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
-			return
-		}
-
 		decoder := json.NewDecoder(r.Body)
 		var t struct {
 			Phone       string

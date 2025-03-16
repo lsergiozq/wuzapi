@@ -211,6 +211,9 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 				panic(err)
 			}
 
+			dbMutex.Lock()
+			defer dbMutex.Unlock()
+
 			for evt := range qrChan {
 				if evt.Event == "code" {
 					// Display QR code in terminal (useful for testing/developing)

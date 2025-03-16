@@ -938,7 +938,7 @@ func (s *server) SendImage() http.HandlerFunc {
 				return
 			}
 			filedata = dataURL.Data
-			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			uploaded, err = clientPointer[userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
 				errChan <- fmt.Errorf("erro ao fazer upload da imagem: %v", err)
 			}

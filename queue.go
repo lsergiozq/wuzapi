@@ -289,10 +289,16 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
+	err := q.channel.Qos(1, 0, false) // Cada consumidor pega apenas uma mensagem por vez
+	if err != nil {
+		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
+		return nil, err
+	}
+
 	deliveries, err := q.channel.Consume(
 		q.queue.Name,
 		fmt.Sprintf("consumer-%d", time.Now().UnixNano()),
-		false,
+		false, // ❌ Não auto-ack para controle manual
 		false,
 		false,
 		false,
@@ -303,7 +309,6 @@ func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 		return nil, err
 	}
 
-	//log.Info().Str("queue", q.queue.Name).Msg("Waiting for messages...")
 	return deliveries, nil
 }
 

@@ -858,7 +858,7 @@ func (s *server) SendImage() http.HandlerFunc {
 		userid, _ := strconv.Atoi(txtid)
 		msgid := ""
 
-		clientPointerLock.RLock()
+		var clientPointerLock sync.RWMutex
 		client := clientPointer[userid]
 		clientPointerLock.RUnlock()
 		if client == nil {
@@ -919,9 +919,6 @@ func (s *server) SendImage() http.HandlerFunc {
 			select {
 			case imageBase64 := <-imageChan:
 				t.Image = "data:image/jpeg;base64," + imageBase64
-			case err := <-errChan:
-				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao converter imagem para base64"))
-				return
 			case <-time.After(5 * time.Second): // Timeout para download
 				s.Respond(w, r, http.StatusInternalServerError, errors.New("Timeout ao baixar imagem"))
 				return
@@ -1016,7 +1013,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			},
 		}
 
-		queue, err := getCachedUserQueue(getRabbitMQURL(), userid)
+		queue, err := GetUserQueue(getRabbitMQURL(), userid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to get user queue"))
 			return

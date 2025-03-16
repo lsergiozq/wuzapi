@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -853,10 +852,22 @@ func ImageToBase64(url string) (string, error) {
 }
 
 func (s *server) SendImage() http.HandlerFunc {
+
 	return func(w http.ResponseWriter, r *http.Request) {
+
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		//log.Info().Str("txtid", txtid).Msg("Conteúdo do txtid")
+
 		userid, _ := strconv.Atoi(txtid)
+
+		//log.Info().Str("userid", strconv.Itoa(userid)).Msg("Conteúdo do userid")
 		msgid := ""
+
+		if clientPointer[userid] == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Nenhuma sessão ativa"))
+			return
+		}
 
 		decoder := json.NewDecoder(r.Body)
 		var t struct {
@@ -886,6 +897,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
+		// Verificar se a imagem está no Payload ou no usuário
 		if t.Image == "" {
 			imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
 			t.Image = imageBase64
@@ -897,97 +909,67 @@ func (s *server) SendImage() http.HandlerFunc {
 			msgid = t.Id
 		}
 
+		var uploaded whatsmeow.UploadResponse
+		var filedata []byte
+		var thumbnailBytes []byte
+
 		if strings.HasPrefix(t.Image, "https://") {
-			imageChan := make(chan string, 1)
-			errChan := make(chan error, 1)
-			go func() {
-				base64, err := ImageToBase64(t.Image)
-				if err != nil {
-					errChan <- err
-					return
-				}
-				imageChan <- base64
-			}()
-			select {
-			case imageBase64 := <-imageChan:
-				t.Image = "data:image/jpeg;base64," + imageBase64
-			case <-time.After(5 * time.Second): // Timeout para download
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Timeout ao baixar imagem"))
+			imageBase64, err := ImageToBase64(t.Image)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao converter imagem para base64"))
 				return
 			}
+			t.Image = "data:image/jpeg;base64," + imageBase64
 		}
 
+		// Caso ainda não tenha imagem, retornar erro
 		if t.Image == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
 			return
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-		var thumbnailBytes []byte
-		errChan := make(chan error, 2)
-
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
+		if strings.HasPrefix(t.Image, "data:image") {
 			dataURL, err := dataurl.DecodeString(t.Image)
 			if err != nil {
-				errChan <- fmt.Errorf("erro ao decodificar imagem base64: %v", err)
+				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar a imagem base64"))
 				return
 			}
+
 			filedata = dataURL.Data
 			uploaded, err = clientPointer[userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
-				errChan <- fmt.Errorf("erro ao fazer upload da imagem: %v", err)
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao fazer upload da imagem"))
+				return
 			}
-		}()
 
-		go func() {
-			defer wg.Done()
 			reader := bytes.NewReader(filedata)
 			img, _, err := image.Decode(reader)
 			if err != nil {
-				errChan <- fmt.Errorf("erro ao processar thumbnail: %v", err)
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao processar thumbnail"))
 				return
 			}
+
 			thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
 			tmpFile, err := os.CreateTemp("", "thumbnail-*.jpg")
 			if err != nil {
-				errChan <- fmt.Errorf("erro ao criar arquivo temporário: %v", err)
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao criar arquivo temporário para thumbnail"))
 				return
 			}
 			defer os.Remove(tmpFile.Name())
+
 			if err := jpeg.Encode(tmpFile, thumbnail, nil); err != nil {
-				errChan <- fmt.Errorf("erro ao codificar thumbnail: %v", err)
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao codificar thumbnail em JPEG"))
 				return
 			}
+
 			thumbnailBytes, err = os.ReadFile(tmpFile.Name())
 			if err != nil {
-				errChan <- fmt.Errorf("erro ao ler thumbnail: %v", err)
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao ler arquivo de thumbnail"))
+				return
 			}
-		}()
-
-		wg.Wait()
-		close(errChan)
-
-		var errMessages []string
-		for err := range errChan {
-			errMessages = append(errMessages, err.Error())
-		}
-		if len(errMessages) > 0 {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(strings.Join(errMessages, "; ")))
-			return
-		}
-
-		if uploaded.URL == "" { // Verificação extra no uploaded.URL
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("URL do upload inválida"))
-			return
-		}
-
-		if len(thumbnailBytes) == 0 {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Thumbnail não gerado"))
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Formato de imagem inválido"))
 			return
 		}
 
@@ -1005,16 +987,30 @@ func (s *server) SendImage() http.HandlerFunc {
 			},
 		}
 
+		if t.ContextInfo.StanzaID != nil {
+			msg.ImageMessage.ContextInfo = &waProto.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			}
+		}
+
+		if t.ContextInfo.MentionedJID != nil {
+			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		}
+
+		// Enfileirar no RabbitMQ
 		queue, err := GetUserQueue(getRabbitMQURL(), userid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to get user queue"))
 			return
 		}
 
+		// Cria msgData no formato original
 		msgData, err := json.Marshal(map[string]interface{}{
 			"Id":       msgid,
 			"Phone":    t.Phone,
-			"MsgProto": &msg,
+			"MsgProto": &msg, // Objeto *waProto.Message diretamente
 			"Userid":   userid,
 		})
 		if err != nil {
@@ -1023,33 +1019,29 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
+		// Valida e aplica Priority
 		priority := uint8(t.Priority)
 		if t.Priority < 0 || t.Priority > 255 {
 			priority = 0
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		enqueueErr := make(chan error, 1)
 		go func() {
 			err := queue.Enqueue(string(msgData), priority, userid)
-			enqueueErr <- err
+			if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
+				log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
+			}
 		}()
 
-		select {
-		case err := <-enqueueErr:
-			if err != nil {
-				log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
-				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to enqueue message: %v", err))
-				return
-			}
-		case <-time.After(5 * time.Second): // Timeout aumentado para 5s
-			log.Warn().Str("msgid", msgid).Msg("Timeout no enfileiramento")
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("Timeout ao enfileirar mensagem"))
-			return
-		}
+		//log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 
-		response := fmt.Sprintf(`{"Details":"Imagem enfileirada","Id":"%s"}`, msgid)
-		s.Respond(w, r, http.StatusOK, response)
+		response := map[string]interface{}{"Details": "Imagem enfileirada", "Id": msgid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
 	}
 }
 
@@ -1976,12 +1968,11 @@ func (s *server) SendMessage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		go func() {
-			err := queue.Enqueue(string(msgData), priority, userid)
-			if err != nil {
-				log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
-			}
-		}()
+		if err := queue.Enqueue(string(msgData), priority, userid); err != nil {
+			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to enqueue message")
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("Failed to enqueue message"))
+			return
+		}
 
 		//log.Info().Str("id", t.Id).Str("phone", t.Phone).Msg("Mensagem enfileirada para envio")
 

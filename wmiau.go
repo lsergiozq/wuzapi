@@ -138,7 +138,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 
 	if clientPointer[userID] != nil {
 		isConnected := clientPointer[userID].IsConnected()
-		if isConnected == true {
+		if isConnected {
 			return
 		}
 	}
@@ -210,9 +210,6 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 			if err != nil {
 				panic(err)
 			}
-
-			dbMutex.Lock()
-			defer dbMutex.Unlock()
 
 			for evt := range qrChan {
 				if evt.Event == "code" {

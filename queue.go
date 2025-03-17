@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nfnt/resize"
 	"github.com/streadway/amqp"
+	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 type RabbitMQQueue struct {
@@ -32,6 +39,9 @@ type MessageData struct {
 	Userid        int             `json:"Userid"`
 	RetryCount    int             `json:"RetryCount,omitempty"`
 	DLQRetryCount int             `json:"DLQRetryCount,omitempty"`
+	SendImage     bool            `json:"SendImage"`
+	Image         string          `json:"Image"`
+	Text          string          `json:"Text"`
 }
 
 var (
@@ -500,13 +510,95 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	}
 
 	var msgProto waProto.Message
-	if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal MsgProto")
 
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao tentar decodificar a mensagem MsgProto")
+	if msgData.SendImage {
+		var uploaded whatsmeow.UploadResponse
+		var filedata []byte
+		var thumbnailBytes []byte
 
-		delivery.Ack(false)
-		return
+		if strings.HasPrefix(msgData.Image, "https://") {
+			if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
+				msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
+			} else {
+				log.Error().Msg("Erro ao converter imagem para base64: " + err.Error())
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao converter imagem para base64")
+				delivery.Ack(false)
+				return
+			}
+		}
+
+		// Caso ainda não tenha imagem, retornar erro
+		if msgData.Image == "" {
+			log.Error().Msg("Imagem obrigatória no Payload ou no usuário")
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem obrigatória no Payload ou no usuário")
+			delivery.Ack(false)
+			return
+		}
+
+		if strings.HasPrefix(msgData.Image, "data:image") {
+			dataURL, err := dataurl.DecodeString(msgData.Image)
+			if err != nil {
+				log.Error().Msg("Erro ao decodificar a imagem base64: " + err.Error())
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao decodificar a imagem base64")
+				delivery.Ack(false)
+				return
+			}
+
+			filedata = dataURL.Data
+			if len(filedata) == 0 {
+				log.Error().Msg("Imagem inválida ou corrompida")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem inválida ou corrompida")
+				delivery.Ack(false)
+				return
+			}
+			uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			if err != nil {
+				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
+				delivery.Ack(false)
+				return
+			}
+
+			reader := bytes.NewReader(filedata)
+			img, _, err := image.Decode(reader)
+			if err != nil {
+				log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail")
+				thumbnailBytes = nil
+			} else {
+				thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+				var thumbnailBuffer bytes.Buffer
+				if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
+					thumbnailBytes = thumbnailBuffer.Bytes()
+				}
+			}
+
+			msgProto = waProto.Message{
+				ImageMessage: &waProto.ImageMessage{
+					Caption:       proto.String(msgData.Text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(http.DetectContentType(filedata)),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+					JPEGThumbnail: thumbnailBytes,
+				},
+			}
+
+		} else {
+			log.Error().Msg("Formato de imagem inválido")
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Formato de imagem inválido")
+			delivery.Ack(false)
+			return
+		}
+
+	} else {
+		msgProto = waProto.Message{
+			ExtendedTextMessage: &waProto.ExtendedTextMessage{
+				Text: proto.String(msgData.Text),
+			},
+		}
 	}
 
 	clientMutex.Lock()

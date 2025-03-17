@@ -909,96 +909,6 @@ func (s *server) SendImage() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-		var thumbnailBytes []byte
-
-		if strings.HasPrefix(t.Image, "https://") {
-			imageBase64, err := ImageToBase64(t.Image)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao converter imagem para base64"))
-				return
-			}
-			t.Image = "data:image/jpeg;base64," + imageBase64
-		}
-
-		// Caso ainda não tenha imagem, retornar erro
-		if t.Image == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Imagem obrigatória no Payload ou no usuário"))
-			return
-		}
-
-		if strings.HasPrefix(t.Image, "data:image") {
-			dataURL, err := dataurl.DecodeString(t.Image)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("Erro ao decodificar a imagem base64"))
-				return
-			}
-
-			filedata = dataURL.Data
-			uploaded, err = clientPointer[userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao fazer upload da imagem"))
-				return
-			}
-
-			reader := bytes.NewReader(filedata)
-			img, _, err := image.Decode(reader)
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao processar thumbnail"))
-				return
-			}
-
-			thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
-
-			tmpFile, err := os.CreateTemp("", "thumbnail-*.jpg")
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao criar arquivo temporário para thumbnail"))
-				return
-			}
-			defer os.Remove(tmpFile.Name())
-
-			if err := jpeg.Encode(tmpFile, thumbnail, nil); err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao codificar thumbnail em JPEG"))
-				return
-			}
-
-			thumbnailBytes, err = os.ReadFile(tmpFile.Name())
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("Erro ao ler arquivo de thumbnail"))
-				return
-			}
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Formato de imagem inválido"))
-			return
-		}
-
-		msg := waProto.Message{
-			ImageMessage: &waProto.ImageMessage{
-				Caption:       proto.String(t.Caption),
-				URL:           proto.String(uploaded.URL),
-				DirectPath:    proto.String(uploaded.DirectPath),
-				MediaKey:      uploaded.MediaKey,
-				Mimetype:      proto.String(http.DetectContentType(filedata)),
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uint64(len(filedata))),
-				JPEGThumbnail: thumbnailBytes,
-			},
-		}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.ImageMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
-			}
-		}
-
-		if t.ContextInfo.MentionedJID != nil {
-			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
 		// Enfileirar no RabbitMQ
 		queue, err := GetUserQueue(getRabbitMQURL(), userid)
 		if err != nil {
@@ -1008,10 +918,12 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		// Cria msgData no formato original
 		msgData, err := json.Marshal(map[string]interface{}{
-			"Id":       msgid,
-			"Phone":    t.Phone,
-			"MsgProto": &msg, // Objeto *waProto.Message diretamente
-			"Userid":   userid,
+			"Id":        msgid,
+			"Phone":     t.Phone,
+			"Userid":    userid,
+			"SendImage": false,
+			"Image":     "",
+			"Text":      t.Caption,
 		})
 		if err != nil {
 			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to marshal msgData")
@@ -1026,12 +938,10 @@ func (s *server) SendImage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		go func() {
-			err := queue.Enqueue(string(msgData), priority, userid)
-			if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
-				log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
-			}
-		}()
+		err = queue.Enqueue(string(msgData), priority, userid)
+		if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
+			log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
+		}
 
 		//log.Info().Str("id", msgid).Str("phone", t.Phone).Msg("Imagem enfileirada para envio")
 
@@ -1928,32 +1838,14 @@ func (s *server) SendMessage() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		msg := &waProto.Message{
-			ExtendedTextMessage: &waProto.ExtendedTextMessage{
-				Text: &t.Body,
-			},
-		}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ExtendedTextMessage.ContextInfo == nil {
-				msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{}
-			}
-			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
 		// Cria msgData no formato original
 		msgData, err := json.Marshal(map[string]interface{}{
-			"Id":       msgid,
-			"Phone":    t.Phone,
-			"MsgProto": &msg, // Objeto *waProto.Message diretamente
-			"Userid":   userid,
+			"Id":        msgid,
+			"Phone":     t.Phone,
+			"Userid":    userid,
+			"SendImage": false,
+			"Image":     "",
+			"Text":      t.Body,
 		})
 		if err != nil {
 			log.Error().Err(err).Str("msgid", msgid).Msg("Failed to marshal msgData")
@@ -1968,12 +1860,11 @@ func (s *server) SendMessage() http.HandlerFunc {
 			log.Warn().Int("priority", t.Priority).Str("msgid", msgid).Msg("Priority out of range, defaulting to 0")
 		}
 
-		go func() {
-			err := queue.Enqueue(string(msgData), priority, userid)
-			if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
-				log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
-			}
-		}()
+		err = queue.Enqueue(string(msgData), priority, userid)
+		if err != nil { // ✅ Correto: verifica se houve erro no enfileiramento
+			log.Error().Err(err).Str("msgid", msgid).Msg("Erro ao enfileirar mensagem")
+			return
+		}
 
 		response := map[string]interface{}{"Details": "Mensagem enfileirada", "Id": t.Id}
 		responseJson, err := json.Marshal(response)

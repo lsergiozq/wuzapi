@@ -1,14 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/nfnt/resize"
+	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
@@ -55,10 +63,12 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 			msg := <-msgs
 			// Decodifica a mensagem JSON da fila
 			var msgData struct {
-				Id       string          `json:"Id"`
-				Phone    string          `json:"Phone"`
-				MsgProto json.RawMessage `json:"MsgProto"` // Armazena a mensagem como JSON bruto
-				Userid   int             `json:"Userid"`
+				Id        string `json:"Id"`
+				Phone     string `json:"Phone"`
+				Userid    int    `json:"Userid"`
+				SendImage bool   `json:"SendImage"`
+				Image     string `json:"Image"`
+				Text      string `json:"Text"`
 			}
 
 			if err := json.Unmarshal(msg.Body, &msgData); err != nil {
@@ -73,9 +83,84 @@ func processQueue(queue *RabbitMQQueue, s *server, cancelChan <-chan struct{}) {
 
 			// Decodifica `msgProto` diretamente da fila
 			var msgProto waProto.Message
-			if err := json.Unmarshal(msgData.MsgProto, &msgProto); err != nil {
-				log.Error().Msg("Erro ao decodificar MsgProto: " + err.Error())
-				continue
+
+			if msgData.SendImage {
+				var uploaded whatsmeow.UploadResponse
+				var filedata []byte
+				var thumbnailBytes []byte
+
+				if strings.HasPrefix(msgData.Image, "https://") {
+					if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
+						msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
+					} else {
+						log.Error().Msg("Erro ao converter imagem para base64: " + err.Error())
+						continue
+					}
+				}
+
+				// Caso ainda não tenha imagem, retornar erro
+				if msgData.Image == "" {
+					log.Error().Msg("Imagem obrigatória no Payload ou no usuário")
+					continue
+				}
+
+				if strings.HasPrefix(msgData.Image, "data:image") {
+					dataURL, err := dataurl.DecodeString(msgData.Image)
+					if err != nil {
+						log.Error().Msg("Erro ao decodificar a imagem base64: " + err.Error())
+						continue
+					}
+
+					filedata = dataURL.Data
+					if len(filedata) == 0 {
+						log.Error().Msg("Imagem inválida ou corrompida")
+						continue
+					}
+					uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+					if err != nil {
+						log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
+						continue
+					}
+
+					reader := bytes.NewReader(filedata)
+					img, _, err := image.Decode(reader)
+					if err != nil {
+						log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail")
+						thumbnailBytes = nil
+					} else {
+						thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+						var thumbnailBuffer bytes.Buffer
+						if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
+							thumbnailBytes = thumbnailBuffer.Bytes()
+						}
+					}
+
+					msgProto = waProto.Message{
+						ImageMessage: &waProto.ImageMessage{
+							Caption:       proto.String(msgData.Text),
+							URL:           proto.String(uploaded.URL),
+							DirectPath:    proto.String(uploaded.DirectPath),
+							MediaKey:      uploaded.MediaKey,
+							Mimetype:      proto.String(http.DetectContentType(filedata)),
+							FileEncSHA256: uploaded.FileEncSHA256,
+							FileSHA256:    uploaded.FileSHA256,
+							FileLength:    proto.Uint64(uint64(len(filedata))),
+							JPEGThumbnail: thumbnailBytes,
+						},
+					}
+
+				} else {
+					log.Error().Msg("Formato de imagem inválido")
+					continue
+				}
+
+			} else {
+				msgProto = waProto.Message{
+					ExtendedTextMessage: &waProto.ExtendedTextMessage{
+						Text: proto.String(msgData.Text),
+					},
+				}
 			}
 
 			recipient, ok := parseJID(msgData.Phone)

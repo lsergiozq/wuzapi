@@ -511,6 +511,9 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
+	client.IsConnected()
+	client.IsLoggedIn()
+
 	jid, err := GetValidNumber(client, msgData.Phone)
 	if err != nil {
 		// Dispara webhook com erro
@@ -624,13 +627,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 				Text: proto.String(msgData.Text),
 			},
 		}
-	}
-
-	if !exists || client == nil {
-		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
-		delivery.Ack(false)
-		return
 	}
 
 	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})

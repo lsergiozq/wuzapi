@@ -350,12 +350,12 @@ func (q *RabbitMQQueue) Close() error {
 // Returns:
 //   - A string containing the JID of the phone number if it is valid.
 //   - An error if the phone number is not found on WhatsApp or if there is an error during the verification process.
-func GetValidNumber(userid int, phone string) (string, error) {
+func GetValidNumber(client *whatsmeow.Client, phone string) (string, error) {
 	// Cria um array de string com o número original
 	phones := []string{phone}
 
 	// Verifica se o número está no WhatsApp
-	resp, err := clientPointer[userid].IsOnWhatsApp(phones)
+	resp, err := client.IsOnWhatsApp(phones)
 
 	if err != nil {
 		log.Error().Str("Phone", phone).Err(err).Msg("Failed to check if phone number is on WhatsApp")
@@ -365,7 +365,7 @@ func GetValidNumber(userid int, phone string) (string, error) {
 		//tenta retirando o 9 do telefone da posicao 5. de 5591993275712 para 551993275712
 		phone = phone[:4] + phone[5:]
 		phones := []string{phone}
-		resp, err = clientPointer[userid].IsOnWhatsApp(phones)
+		resp, err = client.IsOnWhatsApp(phones)
 	}
 
 	// Verifica se a resposta está vazia
@@ -612,7 +612,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
+	jid, err := GetValidNumber(client, msgData.Phone)
 	if err != nil {
 		// Dispara webhook com erro
 		errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone

@@ -266,7 +266,11 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 	//     interval = 5 * time.Second // Valor padrão, caso não tenha sido configurado
 	// }
 
-	interval := 5 * time.Second // Valor padrão, caso não tenha sido configurado
+	interval := 5 - time.Duration(priority) // Ex.: Prioridade 10 → atraso 5-10=0s
+
+	if interval < 0 {
+		interval = 0 // Evita valores negativos
+	}
 
 	err := q.channel.Publish(
 		"WuzAPI_Delayed_Exchange",
@@ -290,7 +294,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	err := q.channel.Qos(1, 0, false) // Cada consumidor pega apenas uma mensagem por vez
+	err := q.channel.Qos(10, 0, false) // Cada consumidor pega apenas uma mensagem por vez
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
 		return nil, err

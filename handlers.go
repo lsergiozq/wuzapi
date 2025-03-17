@@ -922,7 +922,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			"Phone":     t.Phone,
 			"Userid":    userid,
 			"SendImage": true,
-			"Image":     "",
+			"Image":     t.Image,
 			"Text":      t.Caption,
 		})
 		if err != nil {

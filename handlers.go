@@ -921,7 +921,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			"Id":        msgid,
 			"Phone":     t.Phone,
 			"Userid":    userid,
-			"SendImage": false,
+			"SendImage": true,
 			"Image":     "",
 			"Text":      t.Caption,
 		})

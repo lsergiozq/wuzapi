@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,6 +128,69 @@ func parseJID(arg string) (types.JID, bool) {
 		}
 		return recipient, true
 	}
+}
+
+func ignoreNumber(numberInput string) bool {
+	ignores := map[string]bool{
+		"5593500": true, // Operadora Veek
+	}
+
+	return ignores[numberInput]
+}
+
+func formatNumber(numberInput string) string {
+	re := regexp.MustCompile("\\D")
+	formattedNumber := re.ReplaceAllString(numberInput, "")
+
+	if ignoreNumber(formattedNumber) {
+		return numberInput
+	}
+
+	if len(formattedNumber) == 0 || len(formattedNumber) == 3 {
+		return numberInput
+	}
+
+	if len(formattedNumber) >= 2 && formattedNumber[:2] != "55" {
+		return numberInput
+	}
+
+	if len(formattedNumber) >= 2 {
+		formattedNumber = formattedNumber[2:]
+	}
+
+	if len(formattedNumber) < 3 {
+		return numberInput
+	}
+
+	controlDigit := formattedNumber[2]
+	var numberType string
+
+	if controlDigit >= '2' && controlDigit <= '5' {
+		numberType = "Fixed line"
+	} else if controlDigit >= '6' && controlDigit <= '9' {
+		numberType = "Mobile"
+	} else {
+		numberType = "Special number"
+	}
+
+	if numberType != "Mobile" {
+		return numberInput
+	}
+
+	ddd, err := strconv.Atoi(formattedNumber[:2])
+	if err != nil {
+		return numberInput
+	}
+
+	if ddd >= 30 && len(formattedNumber) == 11 {
+		return "55" + formattedNumber[:2] + formattedNumber[3:]
+	}
+
+	if ddd < 30 && len(formattedNumber) == 10 {
+		return "55" + formattedNumber[:2] + "9" + formattedNumber[2:]
+	}
+
+	return "55" + formattedNumber
 }
 
 func (s *server) startClient(userID int, textjid string, token string, subscriptions []string) {

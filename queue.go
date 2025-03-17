@@ -18,6 +18,7 @@ import (
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -42,6 +43,7 @@ type MessageData struct {
 	SendImage     bool            `json:"SendImage"`
 	Image         string          `json:"Image"`
 	Text          string          `json:"Text"`
+	Priority      uint8           `json:"Priority"`
 }
 
 var (
@@ -304,7 +306,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	err := q.channel.Qos(10, 0, false) // Cada consumidor pega apenas uma mensagem por vez
+	err := q.channel.Qos(2, 0, false)
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
 		return nil, err
@@ -340,17 +342,7 @@ func (q *RabbitMQQueue) Close() error {
 	return nil
 }
 
-// getValidNumber checks if a given phone number is registered on WhatsApp for a specific user.
-// It returns the JID (WhatsApp ID) of the phone number if it is valid, or an error if the number is not found or if there is an issue with the verification process.
-//
-// Parameters:
-//   - userid: An integer representing the user ID.
-//   - phone: A string containing the phone number to be checked.
-//
-// Returns:
-//   - A string containing the JID of the phone number if it is valid.
-//   - An error if the phone number is not found on WhatsApp or if there is an error during the verification process.
-func GetValidNumber(client *whatsmeow.Client, phone string) (string, error) {
+func GetValidNumber(client *whatsmeow.Client, phone string) (types.JID, error) {
 	// Cria um array de string com o número original
 	phones := []string{phone}
 
@@ -359,23 +351,24 @@ func GetValidNumber(client *whatsmeow.Client, phone string) (string, error) {
 
 	if err != nil {
 		log.Error().Str("Phone", phone).Err(err).Msg("Failed to check if phone number is on WhatsApp")
-	}
-
-	if len(resp) == 0 && len(phone) == 13 {
-		//tenta retirando o 9 do telefone da posicao 5. de 5591993275712 para 551993275712
-		phone = phone[:4] + phone[5:]
-		phones := []string{phone}
-		resp, err = client.IsOnWhatsApp(phones)
+		return types.JID{}, err
+	} else {
+		if len(resp) > 0 && !resp[0].IsIn {
+			//tenta retirando o 9 do telefone da posicao 5. de 5591993275712 para 551993275712
+			phone = phone[:4] + phone[5:]
+			phones := []string{phone}
+			resp, err = client.IsOnWhatsApp(phones)
+		}
 	}
 
 	// Verifica se a resposta está vazia
 	if len(resp) == 0 {
 		// Retorna um erro se o número não foi encontrado
-		return "", errors.New("número de telefone não encontrado no WhatsApp")
+		return types.JID{}, errors.New("número de telefone não encontrado no WhatsApp")
 	}
 
 	// Extrai o JID do primeiro item (ou todos se preferir concatenar)``
-	jid := resp[0].JID.User + "@" + resp[0].JID.Server
+	jid := resp[0].JID
 
 	// Retorna o JID formatado
 	return jid, nil
@@ -503,33 +496,36 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	clientMutex.Lock()
 	client, exists := clientPointer[msgData.Userid]
-	clientMutex.Unlock()
-	if !exists || client == nil {
+	clientMutex.Unlock() // 🔹 Libera o mutex rapidamente
+
+	if exists && client != nil {
+		if !client.IsConnected() || !client.IsLoggedIn() {
+			log.Warn().Int("userID", msgData.Userid).Msg("Cliente desconectado, tentando reconectar...")
+
+			clientMutex.Lock()
+			client.Disconnect()         // 🔹 Garante que a sessão seja resetada
+			time.Sleep(2 * time.Second) // 🔹 Pequeno delay para garantir reconexão
+
+			client.IsConnected()
+			client.IsLoggedIn()
+			clientMutex.Unlock()
+
+			log.Info().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada com sucesso")
+		}
+	} else {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
 		delivery.Ack(false)
 		return
 	}
 
-	client.IsConnected()
-	client.IsLoggedIn()
+	var phone = formatNumber(msgData.Phone)
 
-	jid, err := GetValidNumber(client, msgData.Phone)
-	if err != nil {
-		// Dispara webhook com erro
-		errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone
-
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
-
-		delivery.Ack(false)
-		return
-	}
-
-	recipient, ok := parseJID(jid)
+	recipient, ok := parseJID(phone)
 	if !ok {
 		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
 		// Dispara webhook com erro
-		errMsg := "Erro ao converter telefone para JID " + jid
+		errMsg := "Erro ao converter telefone para JID: " + phone
 
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
 
@@ -782,6 +778,7 @@ func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
 		false,
 		amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
+			Priority:     msgData.Priority, // 🔹 Define prioridade da mensagem
 			ContentType:  "application/json",
 			Body:         updatedMessage,
 		},

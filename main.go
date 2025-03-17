@@ -81,21 +81,10 @@ func main() {
 		}
 	}
 
-	db, err := sql.Open("sqlite", exPath+"/dbdata/users.db?_pragma=foreign_keys(1)&_busy_timeout=3000")
+	db, err := sql.Open("sqlite", exPath+"/dbdata/users.db?_pragma=foreign_keys(1)&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not open/create " + exPath + "/dbdata/users.db")
 		os.Exit(1)
-	}
-	// Ativa WAL manualmente para garantir suporte a múltiplas conexões
-	_, err = db.Exec("PRAGMA journal_mode=WAL;")
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to set WAL mode")
-	}
-
-	// 🔹 Reduz o tempo de espera para evitar bloqueios
-	_, err = db.Exec("PRAGMA busy_timeout = 5000;") // 5000 ms = 5 segundos de espera
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to set busy timeout")
 	}
 
 	defer db.Close()
@@ -108,9 +97,9 @@ func main() {
 
 	if *waDebug != "" {
 		dbLog := waLog.Stdout("Database", *waDebug, *colorOutput)
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000&_journal_mode=WAL", dbLog)
+		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=5000&_journal_mode=WAL", dbLog)
 	} else {
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000_journal_mode=WAL", nil)
+		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=5000&_journal_mode=WAL", nil)
 	}
 	if err != nil {
 		panic(err)

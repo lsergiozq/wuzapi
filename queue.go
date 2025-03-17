@@ -41,6 +41,7 @@ var (
 	userChannels   = make(map[int]*amqp.Channel) // Mapa para armazenar canais por userID
 	channelsMutex  sync.Mutex                    // Protege o mapa
 	consumersMutex sync.Mutex
+	clientMutex    sync.Mutex
 )
 
 const maxRetries = 10
@@ -504,11 +505,25 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	var jid string
+	clientMutex.Lock()
+	client, exists = clientPointer[msgData.Userid]
+	clientMutex.Unlock()
 
-	go func() {
-		var err error
-		jid, err = GetValidNumber(msgData.Userid, msgData.Phone)
+	if !exists || client == nil {
+		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
+		delivery.Ack(false)
+		return
+	}
+
+	go func(client *whatsmeow.Client, msgData MessageData) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("Recovered from panic in message processing")
+			}
+		}()
+
+		jid, err := GetValidNumber(msgData.Userid, msgData.Phone)
 		if err != nil {
 			// Dispara webhook com erro
 			errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone
@@ -577,7 +592,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 
 		sendWebhookNotification(s, msgData, timestamp, status, details)
-	}()
+	}(client, msgData)
 }
 
 func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, status, details string) {

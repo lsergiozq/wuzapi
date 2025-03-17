@@ -501,10 +501,35 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
+	clientMutex.Lock()
 	client, exists := clientPointer[msgData.Userid]
+	clientMutex.Unlock()
 	if !exists || client == nil {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
+		delivery.Ack(false)
+		return
+	}
+
+	jid, err := GetValidNumber(client, msgData.Phone)
+	if err != nil {
+		// Dispara webhook com erro
+		errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone
+
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
+
+		delivery.Ack(false)
+		return
+	}
+
+	recipient, ok := parseJID(jid)
+	if !ok {
+		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
+		// Dispara webhook com erro
+		errMsg := "Erro ao converter telefone para JID " + jid
+
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
+
 		delivery.Ack(false)
 		return
 	}
@@ -551,7 +576,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 				delivery.Ack(false)
 				return
 			}
-			uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
 				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
 				delivery.Ack(false)
@@ -601,36 +626,9 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 	}
 
-	clientMutex.Lock()
-	client, exists = clientPointer[msgData.Userid]
-	clientMutex.Unlock()
-
 	if !exists || client == nil {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
-		delivery.Ack(false)
-		return
-	}
-
-	jid, err := GetValidNumber(client, msgData.Phone)
-	if err != nil {
-		// Dispara webhook com erro
-		errMsg := "Erro ao converter ao validar o telefone " + msgData.Phone
-
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
-
-		delivery.Ack(false)
-		return
-	}
-
-	recipient, ok := parseJID(jid)
-	if !ok {
-		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
-		// Dispara webhook com erro
-		errMsg := "Erro ao converter telefone para JID " + jid
-
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
-
 		delivery.Ack(false)
 		return
 	}
@@ -651,11 +649,11 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
 		if strings.Contains(err.Error(), "479") || strings.Contains(err.Error(), "500") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
-			clientPointer[msgData.Userid].Disconnect()
+			client.Disconnect()
 			//tempo para reconectar de 10 segundos
 			time.Sleep(10 * time.Second)
-			clientPointer[msgData.Userid].IsConnected()
-			clientPointer[msgData.Userid].IsLoggedIn()
+			client.IsConnected()
+			client.IsLoggedIn()
 			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
 		}
 

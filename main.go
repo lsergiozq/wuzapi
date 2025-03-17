@@ -92,6 +92,12 @@ func main() {
 		log.Warn().Err(err).Msg("Failed to set WAL mode")
 	}
 
+	// 🔹 Reduz o tempo de espera para evitar bloqueios
+	_, err = db.Exec("PRAGMA busy_timeout = 5000;") // 5000 ms = 5 segundos de espera
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to set busy timeout")
+	}
+
 	defer db.Close()
 
 	sqlStmt := `CREATE TABLE IF NOT EXISTS users (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL default "", jid TEXT NOT NULL default "", qrcode TEXT NOT NULL default "", connected INTEGER, expiration INTEGER, events TEXT NOT NULL default "All", imagebase64 TEXT NOT NULL DEFAULT "");`
@@ -102,9 +108,9 @@ func main() {
 
 	if *waDebug != "" {
 		dbLog := waLog.Stdout("Database", *waDebug, *colorOutput)
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", dbLog)
+		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000&_journal_mode=WAL", dbLog)
 	} else {
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", nil)
+		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000_journal_mode=WAL", nil)
 	}
 	if err != nil {
 		panic(err)

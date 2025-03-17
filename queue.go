@@ -518,67 +518,66 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			delivery.Ack(false)
 			return
 		}
-	}()
 
-	recipient, ok := parseJID(jid)
-	if !ok {
-		log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
-		// Dispara webhook com erro
-		errMsg := "Erro ao converter telefone para JID " + jid
+		recipient, ok := parseJID(jid)
+		if !ok {
+			log.Error().Int("userID", msgData.Userid).Msg("Invalid JID")
+			// Dispara webhook com erro
+			errMsg := "Erro ao converter telefone para JID " + jid
 
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
 
-		delivery.Ack(false)
-		return
-	}
-
-	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
-
-	// Define status e detalhes do envio
-	status := "success"
-	details := "Mensagem enviada com sucesso"
-	timestamp := int64(0)
-
-	if err != nil {
-		status = "error"
-		details = err.Error()
-
-		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
-
-		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
-		if strings.Contains(err.Error(), "479") || strings.Contains(err.Error(), "500") {
-			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
-			clientPointer[msgData.Userid].Disconnect()
-			//tempo para reconectar de 10 segundos
-			time.Sleep(10 * time.Second)
-			clientPointer[msgData.Userid].IsConnected()
-			clientPointer[msgData.Userid].IsLoggedIn()
-			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
-		}
-
-		msgData.RetryCount++
-		updatedMessage, err := json.Marshal(msgData)
-		if err != nil {
-			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
-			delivery.Nack(false, true)
+			delivery.Ack(false)
 			return
 		}
-		if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
-			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
-			sendWebhookNotification(s, msgData, time.Now().Unix(), status, "Falha ao reenfileirar mensagem")
-			delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+
+		resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+
+		// Define status e detalhes do envio
+		status := "success"
+		details := "Mensagem enviada com sucesso"
+		timestamp := int64(0)
+
+		if err != nil {
+			status = "error"
+			details = err.Error()
+
+			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
+
+			//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
+			if strings.Contains(err.Error(), "479") || strings.Contains(err.Error(), "500") {
+				log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
+				clientPointer[msgData.Userid].Disconnect()
+				//tempo para reconectar de 10 segundos
+				time.Sleep(10 * time.Second)
+				clientPointer[msgData.Userid].IsConnected()
+				clientPointer[msgData.Userid].IsLoggedIn()
+				log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
+			}
+
+			msgData.RetryCount++
+			updatedMessage, err := json.Marshal(msgData)
+			if err != nil {
+				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
+				delivery.Nack(false, true)
+				return
+			}
+			if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
+				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), status, "Falha ao reenfileirar mensagem")
+				delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+			} else {
+				delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
+			}
+
 		} else {
-			delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
+			timestamp = resp.Timestamp.Unix()
+			//log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
+			delivery.Ack(false) //Processada com sucesso
 		}
 
-	} else {
-		timestamp = resp.Timestamp.Unix()
-		//log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
-		delivery.Ack(false) //Processada com sucesso
-	}
-
-	sendWebhookNotification(s, msgData, timestamp, status, details)
-
+		sendWebhookNotification(s, msgData, timestamp, status, details)
+	}()
 }
 
 func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, status, details string) {

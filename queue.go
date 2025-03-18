@@ -793,3 +793,14 @@ func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
 
 	msg.Ack(false) // ✨ Remove a mensagem da DLQ
 }
+
+// Obtém o token do usuário pelo ID
+func (s *server) getTokenByUserId(userid int) string {
+	var token string
+	err := s.db.QueryRow("SELECT token FROM users WHERE id = ?", userid).Scan(&token)
+	if err != nil {
+		log.Warn().Msg(fmt.Sprintf("Falha ao buscar token para o usuário ID %d", userid))
+		return ""
+	}
+	return token
+}

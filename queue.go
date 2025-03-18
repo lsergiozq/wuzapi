@@ -411,7 +411,6 @@ func StartUserConsumers(s *server, amqpURL string, globalCancelChan chan struct{
 						consumersMutex.Unlock()
 
 						go processUserMessages(queue, s, userID, userCancelChan)
-						//log.Info().Int("userID", userID).Msg("Started consumer for user")
 					}
 				}
 
@@ -492,24 +491,9 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	clientMutex.Unlock() // 🔹 Libera o mutex rapidamente
 
 	if exists && client != nil {
-		if !client.IsConnected() || !client.IsLoggedIn() {
-			log.Warn().Int("userID", msgData.Userid).Msg("Cliente desconectado, tentando reconectar...")
-
-			clientMutex.Lock()
-			client.Disconnect()         // 🔹 Garante que a sessão seja resetada
-			time.Sleep(2 * time.Second) // 🔹 Pequeno delay para garantir reconexão
-			client.IsConnected()
-			client.IsLoggedIn()
-			clientMutex.Unlock()
-			if !client.IsConnected() || !client.IsLoggedIn() {
-				log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
-				delivery.Ack(false)
-				return
-			} else {
-				log.Info().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada com sucesso")
-			}
-		}
+		//sempre tentar reconectar o cliente antes de enviar a mensagem
+		client.IsConnected()
+		client.IsLoggedIn()
 	} else {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")

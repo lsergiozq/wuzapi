@@ -33,22 +33,27 @@ type UserConsumer struct {
 	cancelChan chan struct{}
 }
 
+// Mapa global para armazenar dados de upload por usuário
+var uploadDataCache = make(map[int]struct {
+	UploadResponse        whatsmeow.UploadResponse
+	ThumbnailBytes        []byte
+	FileLength            *uint64
+	Mimetype              *string
+	UploadResponseExpired time.Time
+})
+var uploadDataMutex sync.Mutex
+
 type MessageData struct {
-	Id                    string                   `json:"Id"`
-	Phone                 string                   `json:"Phone"`
-	MsgProto              json.RawMessage          `json:"MsgProto"`
-	Userid                int                      `json:"Userid"`
-	RetryCount            int                      `json:"RetryCount,omitempty"`
-	DLQRetryCount         int                      `json:"DLQRetryCount,omitempty"`
-	SendImage             bool                     `json:"SendImage"`
-	Image                 string                   `json:"Image"`
-	Text                  string                   `json:"Text"`
-	Priority              uint8                    `json:"Priority"`
-	UploadResponse        whatsmeow.UploadResponse `json:"UploadResponse"`
-	UploadResponseExpired time.Time                `json:"UploadResponseExpired"`
-	ThumbnailBytes        []byte                   `json:"ThumbnailBytes"`
-	FileLength            *uint64                  `json:"FileLength"`
-	Mimetype              *string                  `json:"Mimetype"`
+	Id            string          `json:"Id"`
+	Phone         string          `json:"Phone"`
+	MsgProto      json.RawMessage `json:"MsgProto"`
+	Userid        int             `json:"Userid"`
+	RetryCount    int             `json:"RetryCount,omitempty"`
+	DLQRetryCount int             `json:"DLQRetryCount,omitempty"`
+	SendImage     bool            `json:"SendImage"`
+	Image         string          `json:"Image"`
+	Text          string          `json:"Text"`
+	Priority      uint8           `json:"Priority"`
 }
 
 var (
@@ -374,6 +379,7 @@ func GetValidNumber(client *whatsmeow.Client, phone string) (types.JID, error) {
 
 // Pool de Consumidores
 func StartUserConsumers(s *server, amqpURL string, globalCancelChan chan struct{}) {
+	startUploadDataCleanup() // Inicia a limpeza
 	go func() {
 		for {
 			select {
@@ -475,6 +481,36 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 	}
 }
 
+// Função para salvar os dados no cache
+func saveUploadData(userID int, uploaded whatsmeow.UploadResponse, thumbnailBytes []byte, fileLength *uint64, mimetype *string, expiration time.Time) {
+	uploadDataMutex.Lock()
+	defer uploadDataMutex.Unlock()
+	uploadDataCache[userID] = struct {
+		UploadResponse        whatsmeow.UploadResponse
+		ThumbnailBytes        []byte
+		FileLength            *uint64
+		Mimetype              *string
+		UploadResponseExpired time.Time
+	}{
+		UploadResponse:        uploaded,
+		ThumbnailBytes:        thumbnailBytes,
+		FileLength:            fileLength,
+		Mimetype:              mimetype,
+		UploadResponseExpired: expiration,
+	}
+}
+
+// Função para recuperar os dados do cache
+func getUploadData(userID int) (whatsmeow.UploadResponse, []byte, *uint64, *string, time.Time, bool) {
+	uploadDataMutex.Lock()
+	defer uploadDataMutex.Unlock()
+	data, exists := uploadDataCache[userID]
+	if !exists {
+		return whatsmeow.UploadResponse{}, nil, nil, nil, time.Time{}, false
+	}
+	return data.UploadResponse, data.ThumbnailBytes, data.FileLength, data.Mimetype, data.UploadResponseExpired, true
+}
+
 func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queue *RabbitMQQueue) {
 
 	if err := json.Unmarshal(delivery.Body, &msgData); err != nil {
@@ -554,17 +590,23 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		var thumbnailBytes []byte
 		var fileLength *uint64
 		var mimetype *string
+		var imageCacheValid bool
+
+		// Recupera os dados do cache
+		cachedUploaded, cachedThumbnail, cachedLength, cachedMime, expiration, exists := getUploadData(msgData.Userid)
 
 		//verifica se o usuário já possui um UploadResponse, se sim não há necessidad de fazer upload novamente
-		if msgData.UploadResponseExpired.After(time.Now()) {
-			uploaded = msgData.UploadResponse
-			thumbnailBytes = msgData.ThumbnailBytes
-			fileLength = msgData.FileLength
-			mimetype = msgData.Mimetype
+		//quando for https:// não usar o cache
+		if exists && expiration.After(time.Now()) && !strings.HasPrefix(msgData.Image, "https://") {
+			uploaded = cachedUploaded
+			thumbnailBytes = cachedThumbnail
+			fileLength = cachedLength
+			mimetype = cachedMime
 			log.Info().Str("id", msgData.Id).Msg("UploadResponse válido, reutilizando")
 		} else {
 
 			if strings.HasPrefix(msgData.Image, "https://") {
+				imageCacheValid = false
 				if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
 					msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
 				} else {
@@ -573,6 +615,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 					delivery.Ack(false)
 					return
 				}
+			} else {
+				imageCacheValid = true
 			}
 
 			// Caso ainda não tenha imagem, retornar erro
@@ -625,12 +669,11 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 					fileLength = proto.Uint64(uint64(len(filedata)))
 					mimetype = proto.String(http.DetectContentType(filedata))
 
-					// Se a imagem foi enviada com sucesso, atualiza o UploadResponse
-					msgData.UploadResponse = uploaded
-					msgData.UploadResponseExpired = time.Now().Add(1 * time.Hour)
-					msgData.ThumbnailBytes = thumbnailBytes
-					msgData.FileLength = fileLength
-					msgData.Mimetype = mimetype
+					//quando for https: não armazenar em cache
+					if imageCacheValid {
+						// Salva os dados no cache após upload bem-sucedido
+						saveUploadData(msgData.Userid, uploaded, thumbnailBytes, fileLength, mimetype, time.Now().Add(1*time.Hour))
+					}
 
 				}
 
@@ -845,4 +888,32 @@ func (s *server) getTokenByUserId(userid int) string {
 		return ""
 	}
 	return token
+}
+
+func startUploadDataCleanup() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				cleanupUploadData()
+			}
+		}
+	}()
+}
+
+// cleanupUploadData remove entradas expiradas do uploadDataCache
+func cleanupUploadData() {
+	uploadDataMutex.Lock()
+	defer uploadDataMutex.Unlock()
+
+	now := time.Now()
+	for userID, data := range uploadDataCache {
+		if !data.UploadResponseExpired.After(now) {
+			delete(uploadDataCache, userID)
+			log.Info().Int("userID", userID).Msg("Removed expired upload data from cache")
+		}
+	}
 }

@@ -162,6 +162,8 @@ func main() {
 
 	StartDLQConsumer(s, rabbitMQURL)
 
+	startUploadDataCleanup()
+
 	// Aguarda sinais para encerrar (ex.: SIGINT, SIGTERM)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

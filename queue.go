@@ -34,16 +34,21 @@ type UserConsumer struct {
 }
 
 type MessageData struct {
-	Id            string          `json:"Id"`
-	Phone         string          `json:"Phone"`
-	MsgProto      json.RawMessage `json:"MsgProto"`
-	Userid        int             `json:"Userid"`
-	RetryCount    int             `json:"RetryCount,omitempty"`
-	DLQRetryCount int             `json:"DLQRetryCount,omitempty"`
-	SendImage     bool            `json:"SendImage"`
-	Image         string          `json:"Image"`
-	Text          string          `json:"Text"`
-	Priority      uint8           `json:"Priority"`
+	Id                    string                   `json:"Id"`
+	Phone                 string                   `json:"Phone"`
+	MsgProto              json.RawMessage          `json:"MsgProto"`
+	Userid                int                      `json:"Userid"`
+	RetryCount            int                      `json:"RetryCount,omitempty"`
+	DLQRetryCount         int                      `json:"DLQRetryCount,omitempty"`
+	SendImage             bool                     `json:"SendImage"`
+	Image                 string                   `json:"Image"`
+	Text                  string                   `json:"Text"`
+	Priority              uint8                    `json:"Priority"`
+	UploadResponse        whatsmeow.UploadResponse `json:"UploadResponse"`
+	UploadResponseExpired time.Time                `json:"UploadResponseExpired"`
+	ThumbnailBytes        []byte                   `json:"ThumbnailBytes"`
+	FileLength            *uint64                  `json:"FileLength"`
+	Mimetype              *string                  `json:"Mimetype"`
 }
 
 var (
@@ -508,23 +513,23 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		//faz um loop para tentar 3 vezes reconectar o usuário
 		for i := 0; i < 3; i++ {
 			clientPointer[msgData.Userid].Connect()
-			time.Sleep(2 * time.Second)
+			time.Sleep(5 * time.Second)
 			isConnected = clientPointer[msgData.Userid].IsConnected()
 			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
-			log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário")
+			log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário - Tentativa " + fmt.Sprintf("%d", i+1))
 			if isConnected && isLoggedIn {
 				break
 			}
 		}
 
-	}
+		// Verifica se o usuário está conectado e logado
+		if !isConnected || !isLoggedIn {
+			log.Error().Int("userID", msgData.Userid).Msg("Failed to reconnect user session")
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reconectar usuário")
+			delivery.Ack(false)
+			return
+		}
 
-	// Verifica se o usuário está conectado e logado
-	if !isConnected || !isLoggedIn {
-		log.Error().Int("userID", msgData.Userid).Msg("Failed to reconnect user session")
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reconectar usuário")
-		delivery.Ack(false)
-		return
 	}
 
 	var phone = formatNumber(msgData.Phone)
@@ -541,100 +546,114 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	if msgData.Text == "" {
-		log.Warn().Str("id", msgData.Id).Msg("Text message is empty")
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Texto da mensagem vazio")
-		delivery.Ack(false)
-		return
-	}
-
 	var msgProto waProto.Message
 
 	if msgData.SendImage {
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
 		var thumbnailBytes []byte
+		var fileLength *uint64
+		var mimetype *string
 
-		if strings.HasPrefix(msgData.Image, "https://") {
-			if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
-				msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
-			} else {
-				log.Error().Msg("Erro ao converter imagem para base64: " + err.Error())
-				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao converter imagem para base64")
-				delivery.Ack(false)
-				return
-			}
-		}
-
-		// Caso ainda não tenha imagem, retornar erro
-		if msgData.Image == "" {
-			log.Error().Msg("Imagem obrigatória no Payload ou no usuário")
-			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem obrigatória no Payload ou no usuário")
-			delivery.Ack(false)
-			return
-		}
-
-		if strings.HasPrefix(msgData.Image, "data:image") {
-			dataURL, err := dataurl.DecodeString(msgData.Image)
-			if err != nil {
-				log.Error().Msg("Erro ao decodificar a imagem base64: " + err.Error())
-				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao decodificar a imagem base64")
-				delivery.Ack(false)
-				return
-			}
-
-			filedata = dataURL.Data
-			if len(filedata) == 0 {
-				log.Error().Msg("Imagem inválida ou corrompida")
-				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem inválida ou corrompida")
-				delivery.Ack(false)
-				return
-			}
-
-			uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
-			if err != nil {
-				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
-				msgProto = waProto.Message{
-					ExtendedTextMessage: &waProto.ExtendedTextMessage{
-						Text: proto.String(msgData.Text),
-					},
-				}
-			} else {
-
-				reader := bytes.NewReader(filedata)
-				img, _, err := image.Decode(reader)
-				if err != nil {
-					log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail. .")
-					thumbnailBytes = nil
-
-				} else {
-					thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
-
-					var thumbnailBuffer bytes.Buffer
-					if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
-						thumbnailBytes = thumbnailBuffer.Bytes()
-					}
-				}
-
-				msgProto = waProto.Message{
-					ImageMessage: &waProto.ImageMessage{
-						Caption:       proto.String(msgData.Text),
-						URL:           proto.String(uploaded.URL),
-						DirectPath:    proto.String(uploaded.DirectPath),
-						MediaKey:      uploaded.MediaKey,
-						Mimetype:      proto.String(http.DetectContentType(filedata)),
-						FileEncSHA256: uploaded.FileEncSHA256,
-						FileSHA256:    uploaded.FileSHA256,
-						FileLength:    proto.Uint64(uint64(len(filedata))),
-						JPEGThumbnail: thumbnailBytes,
-					},
-				}
-			}
+		//verifica se o usuário já possui um UploadResponse, se sim não há necessidad de fazer upload novamente
+		if msgData.UploadResponseExpired.After(time.Now()) {
+			uploaded = msgData.UploadResponse
+			thumbnailBytes = msgData.ThumbnailBytes
+			fileLength = msgData.FileLength
+			mimetype = msgData.Mimetype
+			log.Info().Str("id", msgData.Id).Msg("UploadResponse válido, reutilizando")
 		} else {
-			log.Error().Msg("Formato de imagem inválido")
-			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Formato de imagem inválido")
-			delivery.Ack(false)
-			return
+
+			if strings.HasPrefix(msgData.Image, "https://") {
+				if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
+					msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
+				} else {
+					log.Error().Msg("Erro ao converter imagem para base64: " + err.Error())
+					sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao converter imagem para base64")
+					delivery.Ack(false)
+					return
+				}
+			}
+
+			// Caso ainda não tenha imagem, retornar erro
+			if msgData.Image == "" {
+				log.Error().Msg("Imagem obrigatória no Payload ou no usuário")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem obrigatória no Payload ou no usuário")
+				delivery.Ack(false)
+				return
+			}
+
+			if strings.HasPrefix(msgData.Image, "data:image") {
+				dataURL, err := dataurl.DecodeString(msgData.Image)
+				if err != nil {
+					log.Error().Msg("Erro ao decodificar a imagem base64: " + err.Error())
+					sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Erro ao decodificar a imagem base64")
+					delivery.Ack(false)
+					return
+				}
+
+				filedata = dataURL.Data
+				if len(filedata) == 0 {
+					log.Error().Msg("Imagem inválida ou corrompida")
+					sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem inválida ou corrompida")
+					delivery.Ack(false)
+					return
+				}
+
+				uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
+
+				if err != nil {
+					log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
+					sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Imagem inválida ou corrompida. Tente novamente mais tarde")
+					delivery.Ack(false)
+				} else {
+					reader := bytes.NewReader(filedata)
+					img, _, err := image.Decode(reader)
+					if err != nil {
+						log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail. .")
+						thumbnailBytes = nil
+
+					} else {
+						thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+						var thumbnailBuffer bytes.Buffer
+						if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
+							thumbnailBytes = thumbnailBuffer.Bytes()
+						}
+					}
+
+					fileLength = proto.Uint64(uint64(len(filedata)))
+					mimetype = proto.String(http.DetectContentType(filedata))
+
+					// Se a imagem foi enviada com sucesso, atualiza o UploadResponse
+					msgData.UploadResponse = uploaded
+					msgData.UploadResponseExpired = time.Now().Add(1 * time.Hour)
+					msgData.ThumbnailBytes = thumbnailBytes
+					msgData.FileLength = fileLength
+					msgData.Mimetype = mimetype
+
+				}
+
+			} else {
+				log.Error().Msg("Formato de imagem inválido")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Formato de imagem inválido")
+				delivery.Ack(false)
+				return
+			}
+		}
+
+		msgProto = waProto.Message{
+			ImageMessage: &waProto.ImageMessage{
+				Caption:       proto.String(msgData.Text),
+				URL:           proto.String(uploaded.URL),
+				DirectPath:    proto.String(uploaded.DirectPath),
+				MediaKey:      uploaded.MediaKey,
+				Mimetype:      mimetype,
+				FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256:    uploaded.FileSHA256,
+				FileLength:    fileLength,
+				JPEGThumbnail: thumbnailBytes,
+			},
 		}
 
 	} else {
@@ -661,30 +680,37 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 10 segundos
-			time.Sleep(2 * time.Second)
+			time.Sleep(5 * time.Second)
 			clientPointer[msgData.Userid].IsConnected()
 			clientPointer[msgData.Userid].IsLoggedIn()
 			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
 		}
-
-		msgData.RetryCount++
-		updatedMessage, err := json.Marshal(msgData)
-		if err != nil {
-			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
-			delivery.Nack(false, true)
-			return
-		}
-		if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
-			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
-			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reenfileirar mensagem")
-			delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+		//se for erro 400 é pq já foi enviada, marca como sucesso e envia o webhook, pois foi rejeita por ter o mesmo id
+		if strings.Contains(err.Error(), "400") {
+			status = "success"
+			details = "Mensagem já enviada"
+			timestamp = resp.Timestamp.Unix()
+			delivery.Ack(false) //Processada com sucesso
+			sendWebhookNotification(s, msgData, timestamp, status, details)
 		} else {
-			delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
-		}
 
+			msgData.RetryCount++
+			updatedMessage, err := json.Marshal(msgData)
+			if err != nil {
+				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
+				delivery.Nack(false, true)
+				return
+			}
+			if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
+				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reenfileirar mensagem")
+				delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+			} else {
+				delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
+			}
+		}
 	} else {
 		timestamp = resp.Timestamp.Unix()
-		//log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
 		delivery.Ack(false) //Processada com sucesso
 		sendWebhookNotification(s, msgData, timestamp, status, details)
 	}

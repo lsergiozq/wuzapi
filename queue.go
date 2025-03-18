@@ -500,6 +500,33 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 	}()
 
+	if !isConnected || !isLoggedIn {
+		log.Warn().Int("userID", msgData.Userid).Msg("Reconnecting user session")
+		clientPointer[msgData.Userid].Disconnect()
+		time.Sleep(2 * time.Second)
+
+		//faz um loop para tentar 3 vezes reconectar o usuário
+		for i := 0; i < 3; i++ {
+			clientPointer[msgData.Userid].Connect()
+			time.Sleep(2 * time.Second)
+			isConnected = clientPointer[msgData.Userid].IsConnected()
+			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
+			log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário")
+			if isConnected && isLoggedIn {
+				break
+			}
+		}
+
+	}
+
+	// Verifica se o usuário está conectado e logado
+	if !isConnected || !isLoggedIn {
+		log.Error().Int("userID", msgData.Userid).Msg("Failed to reconnect user session")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reconectar usuário")
+		delivery.Ack(false)
+		return
+	}
+
 	var phone = formatNumber(msgData.Phone)
 
 	recipient, ok := parseJID(phone)

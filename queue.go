@@ -236,7 +236,7 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		false, // Exclusive
 		false, // No-wait
 		amqp.Table{
-			"x-max-priority":         11,
+			"x-max-priority":         10,
 			"x-dead-letter-exchange": "WuzAPI_DLX",
 		},
 	)

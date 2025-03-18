@@ -236,7 +236,7 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		false, // Exclusive
 		false, // No-wait
 		amqp.Table{
-			"x-max-priority":         10,
+			"x-max-priority":         11,
 			"x-dead-letter-exchange": "WuzAPI_DLX",
 		},
 	)
@@ -278,11 +278,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 	//     interval = 5 * time.Second // Valor padrão, caso não tenha sido configurado
 	// }
 
-	interval := 5 - time.Duration(priority) // Ex.: Prioridade 10 → atraso 5-10=0s
-
-	if interval < 0 {
-		interval = 0 // Evita valores negativos
-	}
+	//interval := 5 - time.Duration(priority) // Ex.: Prioridade 10 → atraso 5-10=0s
 
 	err := q.channel.Publish(
 		"WuzAPI_Delayed_Exchange",
@@ -294,9 +290,6 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 			Priority:     priority,
 			ContentType:  "application/json",
 			Body:         []byte(message),
-			Headers: amqp.Table{
-				"x-delay": int(interval.Milliseconds()),
-			},
 		},
 	)
 	if err != nil {
@@ -306,7 +299,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	err := q.channel.Qos(2, 0, false)
+	err := q.channel.Qos(1, 0, false)
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
 		return nil, err
@@ -666,7 +659,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			client.Disconnect()
 			//tempo para reconectar de 10 segundos
-			time.Sleep(10 * time.Second)
+			time.Sleep(2 * time.Second)
 			client.IsConnected()
 			client.IsLoggedIn()
 			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")

@@ -633,8 +633,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	timestamp := int64(0)
 
 	if err != nil {
-		status = "error"
-		details = err.Error()
 
 		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
 
@@ -658,7 +656,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 		if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
 			log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
-			sendWebhookNotification(s, msgData, time.Now().Unix(), status, "Falha ao reenfileirar mensagem")
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reenfileirar mensagem")
 			delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
 		} else {
 			delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
@@ -668,10 +666,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		timestamp = resp.Timestamp.Unix()
 		//log.Info().Str("id", msgData.Id).Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Msg("Message sent")
 		delivery.Ack(false) //Processada com sucesso
+		sendWebhookNotification(s, msgData, timestamp, status, details)
 	}
-
-	sendWebhookNotification(s, msgData, timestamp, status, details)
-
 }
 
 func sendWebhookNotification(s *server, msgData MessageData, timestamp int64, status, details string) {

@@ -496,6 +496,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	clientMutex.Lock()
 	client, exists := clientPointer[msgData.Userid]
+	client.IsConnected()
+	client.IsLoggedIn()
 	clientMutex.Unlock() // 🔹 Libera o mutex rapidamente
 
 	if exists && client != nil {
@@ -505,7 +507,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			clientMutex.Lock()
 			client.Disconnect()         // 🔹 Garante que a sessão seja resetada
 			time.Sleep(2 * time.Second) // 🔹 Pequeno delay para garantir reconexão
-
 			client.IsConnected()
 			client.IsLoggedIn()
 			clientMutex.Unlock()
@@ -578,38 +579,42 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
 				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
-				delivery.Ack(false)
-				return
-			}
-
-			reader := bytes.NewReader(filedata)
-			img, _, err := image.Decode(reader)
-			if err != nil {
-				log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail")
-				thumbnailBytes = nil
+				msgProto = waProto.Message{
+					ExtendedTextMessage: &waProto.ExtendedTextMessage{
+						Text: proto.String(msgData.Text),
+					},
+				}
 			} else {
-				thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
 
-				var thumbnailBuffer bytes.Buffer
-				if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
-					thumbnailBytes = thumbnailBuffer.Bytes()
+				reader := bytes.NewReader(filedata)
+				img, _, err := image.Decode(reader)
+				if err != nil {
+					log.Error().Msg("Erro ao decodificar imagem, enviando sem thumbnail. .")
+					thumbnailBytes = nil
+
+				} else {
+					thumbnail := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+
+					var thumbnailBuffer bytes.Buffer
+					if err := jpeg.Encode(&thumbnailBuffer, thumbnail, nil); err == nil {
+						thumbnailBytes = thumbnailBuffer.Bytes()
+					}
+				}
+
+				msgProto = waProto.Message{
+					ImageMessage: &waProto.ImageMessage{
+						Caption:       proto.String(msgData.Text),
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(http.DetectContentType(filedata)),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+						JPEGThumbnail: thumbnailBytes,
+					},
 				}
 			}
-
-			msgProto = waProto.Message{
-				ImageMessage: &waProto.ImageMessage{
-					Caption:       proto.String(msgData.Text),
-					URL:           proto.String(uploaded.URL),
-					DirectPath:    proto.String(uploaded.DirectPath),
-					MediaKey:      uploaded.MediaKey,
-					Mimetype:      proto.String(http.DetectContentType(filedata)),
-					FileEncSHA256: uploaded.FileEncSHA256,
-					FileSHA256:    uploaded.FileSHA256,
-					FileLength:    proto.Uint64(uint64(len(filedata))),
-					JPEGThumbnail: thumbnailBytes,
-				},
-			}
-
 		} else {
 			log.Error().Msg("Formato de imagem inválido")
 			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Formato de imagem inválido")

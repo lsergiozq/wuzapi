@@ -496,8 +496,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	clientMutex.Lock()
 	client, exists := clientPointer[msgData.Userid]
-	client.IsConnected()
-	client.IsLoggedIn()
 	clientMutex.Unlock() // 🔹 Libera o mutex rapidamente
 
 	if exists && client != nil {

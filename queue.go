@@ -486,20 +486,11 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	clientMutex.Lock()
-	client, exists := clientPointer[msgData.Userid]
-	clientMutex.Unlock() // 🔹 Libera o mutex rapidamente
+	//sempre tentar reconectar o cliente antes de enviar a mensagem
+	isConnected := clientPointer[msgData.Userid].IsConnected()
+	isLoggedIn := clientPointer[msgData.Userid].IsLoggedIn()
 
-	if exists && client != nil {
-		//sempre tentar reconectar o cliente antes de enviar a mensagem
-		client.IsConnected()
-		client.IsLoggedIn()
-	} else {
-		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
-		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
-		delivery.Ack(false)
-		return
-	}
+	log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário")
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -573,7 +564,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 				return
 			}
 
-			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+			uploaded, err = clientPointer[msgData.Userid].Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
 				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
 				msgProto = waProto.Message{
@@ -627,7 +618,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 	}
 
-	resp, err := client.SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+	resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
 
 	// Define status e detalhes do envio
 	status := "success"
@@ -641,11 +632,11 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
 		if strings.Contains(err.Error(), "479") || strings.Contains(err.Error(), "500") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
-			client.Disconnect()
+			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 10 segundos
 			time.Sleep(2 * time.Second)
-			client.IsConnected()
-			client.IsLoggedIn()
+			clientPointer[msgData.Userid].IsConnected()
+			clientPointer[msgData.Userid].IsLoggedIn()
 			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
 		}
 

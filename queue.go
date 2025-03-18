@@ -508,8 +508,14 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			client.IsConnected()
 			client.IsLoggedIn()
 			clientMutex.Unlock()
-
-			log.Info().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada com sucesso")
+			if !client.IsConnected() || !client.IsLoggedIn() {
+				log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Nenhuma sessão ativa no WhatsApp")
+				delivery.Ack(false)
+				return
+			} else {
+				log.Info().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada com sucesso")
+			}
 		}
 	} else {
 		log.Warn().Int("userID", msgData.Userid).Msg("No active session for user")
@@ -517,6 +523,14 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		delivery.Ack(false)
 		return
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Str("id", msgData.Id).Msgf("Erro ao enviar mensagem: %v", r)
+			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha interna ao criar mensagem. Tente reenviar mais tarde")
+			delivery.Ack(false)
+		}
+	}()
 
 	var phone = formatNumber(msgData.Phone)
 
@@ -528,6 +542,13 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", errMsg)
 
+		delivery.Ack(false)
+		return
+	}
+
+	if msgData.Text == "" {
+		log.Warn().Str("id", msgData.Id).Msg("Text message is empty")
+		sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Texto da mensagem vazio")
 		delivery.Ack(false)
 		return
 	}
@@ -574,6 +595,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 				delivery.Ack(false)
 				return
 			}
+
 			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
 			if err != nil {
 				log.Error().Msg("Erro ao fazer upload da imagem: " + err.Error())
@@ -746,7 +768,7 @@ func StartDLQConsumer(s *server, amqpURL string) {
 }
 
 func handleDLQMessage(s *server, msg amqp.Delivery, queue *RabbitMQQueue) {
-	log.Warn().Str("message_id", string(msg.Body)).Msg("Message received from DLQ, checking retry attempts...")
+	log.Warn().Msg("Message received from DLQ, checking retry attempts...")
 
 	var msgData MessageData
 	if err := json.Unmarshal(msg.Body, &msgData); err != nil {

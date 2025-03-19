@@ -216,6 +216,9 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 	return queueInstance, err
 }
 
+var queueChannels = make(map[string]*amqp.Channel)
+var queueMutex sync.Mutex
+
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
 	if err != nil {
@@ -231,14 +234,22 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 		}
 	}
 
-	// 🔹 Abre um novo canal para evitar erro "channel/connection is not open"
-	ch, err := globalQueue.conn.Channel()
-	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
-		return nil, err
-	}
-
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
+
+	// Bloqueia o mutex para evitar race conditions ao acessar o mapa
+	queueMutex.Lock()
+	ch, exists := queueChannels[queueName]
+	if !exists {
+		ch, err = globalQueue.conn.Channel()
+		if err != nil {
+			queueMutex.Unlock()
+			log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
+			return nil, err
+		}
+		queueChannels[queueName] = ch
+	}
+	queueMutex.Unlock()
+
 	qUser, err := ch.QueueDeclare(
 		queueName,
 		true,  // Durable
@@ -330,6 +341,18 @@ func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
 	}
 
 	return deliveries, nil
+}
+
+func CloseUserQueue(userID int) {
+	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
+
+	queueMutex.Lock()
+	if ch, exists := queueChannels[queueName]; exists {
+		ch.Close()
+		delete(queueChannels, queueName)
+		log.Info().Int("userID", userID).Msg("User queue channel closed")
+	}
+	queueMutex.Unlock()
 }
 
 // Close fecha o canal explicitamente (chamado manualmente, se necessário)
@@ -446,6 +469,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 	deliveries, err := queue.Dequeue()
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Failed to start consuming messages")
+		CloseUserQueue(userID) // ✅ Fecha o canal se não puder consumir mensagens
 		return
 	}
 
@@ -462,7 +486,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 			if !ok {
 				log.Warn().Int("userID", userID).Msg("Delivery channel closed. Cleaning up resources...")
 				consumersMutex.Lock()
-				queue.Close() // Fecha o canal ao sair
+				CloseUserQueue(userID) // ✅ Fecha o canal se não puder consumir mensagens
 				delete(userConsumers, userID)
 				consumersMutex.Unlock()
 				return
@@ -473,7 +497,7 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 		case <-cancelChan:
 			//log.Info().Int("userID", userID).Msg("Shutting down user consumer")
 			consumersMutex.Lock()
-			queue.Close() // Fecha o canal ao encerrar
+			CloseUserQueue(userID) // ✅ Fecha o canal se não puder consumir mensagens
 			delete(userConsumers, userID)
 			consumersMutex.Unlock()
 			return

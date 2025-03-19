@@ -218,6 +218,8 @@ func GetRabbitMQInstance(amqpURL string) (*RabbitMQQueue, error) {
 
 var queueChannels = make(map[string]*amqp.Channel)
 var queueMutex sync.Mutex
+var queueBindings = make(map[string]struct{}) // Armazena filas já vinculadas
+var bindingsMutex sync.Mutex                  // Protege acesso ao mapa de bindings
 
 func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	globalQueue, err := GetRabbitMQInstance(amqpURL)
@@ -236,20 +238,25 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 
 	queueName := fmt.Sprintf("WuzAPI_Messages_Queue_%d", userID)
 
-	// Bloqueia o mutex para evitar race conditions ao acessar o mapa
+	// 🔹 Verifica se já existe um canal para essa fila
 	queueMutex.Lock()
 	ch, exists := queueChannels[queueName]
-	if !exists {
-		ch, err = globalQueue.conn.Channel()
-		if err != nil {
-			queueMutex.Unlock()
-			log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
-			return nil, err
-		}
-		queueChannels[queueName] = ch
+	if exists {
+		queueMutex.Unlock()
+		return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: amqp.Queue{Name: queueName}}, nil
 	}
+
+	// 🔹 Cria um novo canal
+	ch, err = globalQueue.conn.Channel()
+	if err != nil {
+		queueMutex.Unlock()
+		log.Error().Err(err).Int("userID", userID).Msg("Failed to open user channel")
+		return nil, err
+	}
+	queueChannels[queueName] = ch
 	queueMutex.Unlock()
 
+	// 🔹 Declara a fila
 	qUser, err := ch.QueueDeclare(
 		queueName,
 		true,  // Durable
@@ -264,29 +271,29 @@ func GetUserQueue(amqpURL string, userID int) (*RabbitMQQueue, error) {
 	if err != nil {
 		log.Error().Err(err).Int("userID", userID).Msg("Failed to declare user queue")
 		ch.Close()
+		queueMutex.Lock()
+		delete(queueChannels, queueName)
+		queueMutex.Unlock()
 		return nil, err
 	}
 
-	// 🔹 Verifica se a fila foi criada corretamente antes de retornar
-	if qUser.Name == "" {
-		log.Error().Int("userID", userID).Msg("User queue name is empty, something went wrong")
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare queue for user %d", userID)
+	// 🔹 Vincula a fila ao exchange apenas se necessário
+	bindingKey := fmt.Sprintf("user-%d", userID)
+	bindingsMutex.Lock()
+	if _, alreadyBound := queueBindings[queueName]; !alreadyBound {
+		err = ch.QueueBind(qUser.Name, bindingKey, "WuzAPI_Delayed_Exchange", false, nil)
+		if err != nil {
+			log.Error().Err(err).Int("userID", userID).Msg("Failed to bind user queue")
+			ch.Close()
+			queueMutex.Lock()
+			delete(queueChannels, queueName)
+			queueMutex.Unlock()
+			bindingsMutex.Unlock()
+			return nil, err
+		}
+		queueBindings[queueName] = struct{}{} // Marca como vinculado
 	}
-
-	// 🔹 Vincula a fila do usuário à `WuzAPI_Delayed_Exchange` para receber mensagens atrasadas
-	err = ch.QueueBind(
-		qUser.Name,
-		fmt.Sprintf("user-%d", userID), // Routing key específica do usuário
-		"WuzAPI_Delayed_Exchange",
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Error().Err(err).Int("userID", userID).Msg("Failed to bind user queue")
-		ch.Close()
-		return nil, err
-	}
+	bindingsMutex.Unlock()
 
 	return &RabbitMQQueue{conn: globalQueue.conn, channel: ch, queue: qUser}, nil
 }

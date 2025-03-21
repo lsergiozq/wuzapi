@@ -621,7 +621,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		var thumbnailBytes []byte
 		var fileLength *uint64
 		var mimetype *string
-		var imageCacheValid bool
+		var useImageCache bool
 
 		// Recupera os dados do cache
 		cachedUploaded, cachedThumbnail, cachedLength, cachedMime, expiration, exists := getUploadData(msgData.Userid)
@@ -635,9 +635,10 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			mimetype = cachedMime
 			log.Info().Str("id", msgData.Id).Msg("UploadResponse válido, reutilizando")
 		} else {
+			useImageCache = true
 
 			if strings.HasPrefix(msgData.Image, "https://") {
-				imageCacheValid = false
+				useImageCache = false
 				if imageBase64, err := ImageToBase64(msgData.Image); err == nil {
 					msgData.Image = fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64)
 				} else {
@@ -646,8 +647,12 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 					delivery.Ack(false)
 					return
 				}
-			} else {
-				imageCacheValid = true
+			}
+
+			// Verificar se a imagem está no Payload ou no usuário
+			if msgData.Image == "" {
+				imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
+				msgData.Image = imageBase64
 			}
 
 			// Caso ainda não tenha imagem, retornar erro
@@ -701,7 +706,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 					mimetype = proto.String(http.DetectContentType(filedata))
 
 					//quando for https: não armazenar em cache
-					if imageCacheValid {
+					if useImageCache {
 						// Salva os dados no cache após upload bem-sucedido
 						saveUploadData(msgData.Userid, uploaded, thumbnailBytes, fileLength, mimetype, time.Now().Add(1*time.Hour))
 					}

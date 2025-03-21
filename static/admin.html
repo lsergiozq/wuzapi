@@ -109,44 +109,52 @@
                 });
         }
         
-        function deleteUser(userId, token) {
+        async function deleteUser(userId, token) {
             if (!confirm('Você realmente deseja excluir este usuário?')) return;
 
-            fetch('https://wuzapi.ow.app.br/admin/users/' + userId, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': token
-                }
-            })
-                .then(response => {
-                    if (response.ok) {
-                        alert('Usuário excluído com sucesso');
-                        loadUsers();
-                    } else {
-                        alert('Erro ao excluir usuário');
+            try {
+                const response = await fetch('https://wuzapi.ow.app.br/admin/users/' + userId, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': token
                     }
-                })
-                .catch(error => console.error('Erro ao excluir usuário:', error));
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Usuário excluído com sucesso');
+                    loadUsers();
+                } else {
+                    alert(`Erro ao excluir usuário: ${result.error || 'erro desconhecido'}`);
+                }
+            } catch (error) {
+                console.error('Erro ao excluir usuário:', error);
+            }
         }
 
-        function sessionLogout(token) {
+        async function sessionLogout(token) {
             if (!confirm('Você realmente deseja desconectar este usuário?')) return;
 
-            fetch('https://wuzapi.ow.app.br/session/logout', {
-                method: 'POST',
-                headers: {
-                    'token': token
-                }
-            })
-                .then(response => {
-                    if (response.ok) {
-                        alert('Desconectado com sucesso');
-                        loadUsers();
-                    } else {
-                        alert('Erro ao desconectar usuário');
+            try {
+                const response = await fetch('https://wuzapi.ow.app.br/session/logout', {
+                    method: 'POST',
+                    headers: {
+                        'token': token
                     }
-                })
-                .catch(error => console.error('Erro ao desconectar usuário:', error));
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Desconectado com sucesso');
+                    loadUsers();
+                } else {
+                    alert(`Erro ao desconectar usuário: ${result.error || 'erro desconhecido'}`);
+                }
+            } catch (error) {
+                console.error('Erro ao desconectar usuário:', error);
+            }
         }
     </script>
 </body>

@@ -327,7 +327,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	err := q.channel.Qos(2, 0, false)
+	err := q.channel.Qos(3, 0, false)
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
 		return nil, err

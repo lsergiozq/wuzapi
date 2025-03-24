@@ -513,9 +513,16 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 					cancel()
 				case <-ctx.Done():
 					cancel()
-					log.Error().Str("msgID", delivery.MessageId).Int("userID", userID).Msg("Timeout ao processar mensagem — ignorando mensagem.")
-					// ✅ Nack para reentregar
+					log.Error().Str("msgID", delivery.MessageId).Int("userID", userID).Msg("Timeout ao processar mensagem — forçando fechamento do canal.")
+
+					// Força reentrega da mensagem
 					_ = delivery.Nack(false, true)
+
+					// Fecha o canal e remove o consumidor
+					consumersMutex.Lock()
+					queue.Close()
+					delete(userConsumers, userID)
+					consumersMutex.Unlock()
 				}
 			}(delivery)
 

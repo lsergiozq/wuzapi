@@ -649,12 +649,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 				}
 			}
 
-			// Verificar se a imagem está no Payload ou no usuário
-			if msgData.Image == "" {
-				imageBase64 := r.Context().Value("userinfo").(Values).Get("ImageBase64")
-				msgData.Image = imageBase64
-			}
-
 			// Caso ainda não tenha imagem, retornar erro
 			if msgData.Image == "" {
 				log.Error().Msg("Imagem obrigatória no Payload ou no usuário")
@@ -755,7 +749,9 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
 
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
-		if strings.Contains(err.Error(), "479") || strings.Contains(err.Error(), "500") {
+		if strings.Contains(err.Error(), "400") ||
+			strings.Contains(err.Error(), "479") ||
+			strings.Contains(err.Error(), "500") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 10 segundos
@@ -763,16 +759,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			clientPointer[msgData.Userid].IsConnected()
 			clientPointer[msgData.Userid].IsLoggedIn()
 			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
-		}
-		//se for erro 400 é pq já foi enviada, marca como sucesso e envia o webhook, pois foi rejeita por ter o mesmo id
-		if strings.Contains(err.Error(), "400") {
-			status = "success"
-			details = "Mensagem já enviada"
-			timestamp = resp.Timestamp.Unix()
-			delivery.Ack(false) //Processada com sucesso
-			sendWebhookNotification(s, msgData, timestamp, status, details)
 		} else {
-
 			msgData.RetryCount++
 			updatedMessage, err := json.Marshal(msgData)
 			if err != nil {

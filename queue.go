@@ -498,8 +498,27 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 				consumersMutex.Unlock()
 				return
 			}
+			// 🕒 Timeout de 2 minutos por mensagem
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			done := make(chan struct{})
 
-			ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
+			go func() {
+				ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				cancel() // encerra contexto normalmente
+			case <-ctx.Done():
+				cancel()
+				log.Error().Int("userID", userID).Msg("Timeout no processamento da mensagem. Encerrando consumidor.")
+				consumersMutex.Lock()
+				CloseUserQueue(userID)
+				delete(userConsumers, userID)
+				consumersMutex.Unlock()
+				return // ou continue, se preferir apenas encerrar a mensagem e seguir
+			}
 
 		case <-cancelChan:
 			//log.Info().Int("userID", userID).Msg("Shutting down user consumer")

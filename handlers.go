@@ -1488,6 +1488,7 @@ func (s *server) DeleteUserByToken() http.HandlerFunc {
 		userid, err := s.GetUserIdByToken(token)
 		if err != nil {
 			s.Respond(w, r, http.StatusNotFound, errors.New(err.Error()))
+			return
 		}
 
 		//antes de excluir, fechar a conexão com whatsapp

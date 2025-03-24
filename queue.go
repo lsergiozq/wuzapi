@@ -327,7 +327,7 @@ func (q *RabbitMQQueue) Enqueue(message string, priority uint8, userID int) erro
 }
 
 func (q *RabbitMQQueue) Dequeue() (<-chan amqp.Delivery, error) {
-	err := q.channel.Qos(1, 0, false)
+	err := q.channel.Qos(2, 0, false)
 	if err != nil {
 		log.Error().Err(err).Str("queue", q.queue.Name).Msg("Failed to set QoS")
 		return nil, err
@@ -498,27 +498,26 @@ func processUserMessages(queue *RabbitMQQueue, s *server, userID int, cancelChan
 				consumersMutex.Unlock()
 				return
 			}
-			// 🕒 Timeout de 2 minutos por mensagem
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			done := make(chan struct{})
+			// ✨ Lança um worker para processar a mensagem com timeout
+			go func(delivery amqp.Delivery) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				done := make(chan struct{})
 
-			go func() {
-				ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
-				close(done)
-			}()
+				go func() {
+					ProcessMessage(delivery, s, MessageData{Userid: userID}, queue)
+					close(done)
+				}()
 
-			select {
-			case <-done:
-				cancel() // encerra contexto normalmente
-			case <-ctx.Done():
-				cancel()
-				log.Error().Int("userID", userID).Msg("Timeout no processamento da mensagem. Encerrando consumidor.")
-				consumersMutex.Lock()
-				CloseUserQueue(userID)
-				delete(userConsumers, userID)
-				consumersMutex.Unlock()
-				return // ou continue, se preferir apenas encerrar a mensagem e seguir
-			}
+				select {
+				case <-done:
+					cancel()
+				case <-ctx.Done():
+					cancel()
+					log.Error().Str("msgID", delivery.MessageId).Int("userID", userID).Msg("Timeout ao processar mensagem — ignorando mensagem.")
+					// ✅ Nack para reentregar
+					_ = delivery.Nack(false, true)
+				}
+			}(delivery)
 
 		case <-cancelChan:
 			//log.Info().Int("userID", userID).Msg("Shutting down user consumer")

@@ -771,7 +771,10 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 	if err != nil {
 
-		log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to send message")
+		msgData.RetryCount++
+		updatedMessage, err := json.Marshal(msgData)
+
+		log.Error().Err(err).Int("userID", msgData.Userid).Msg("Failed to send message")
 
 		//verifica a mensagem de erro é "server returned error 479", se sim, reinicia a sessão
 		if strings.Contains(err.Error(), "400") ||
@@ -781,12 +784,18 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 10 segundos
 			time.Sleep(5 * time.Second)
-			clientPointer[msgData.Userid].IsConnected()
-			clientPointer[msgData.Userid].IsLoggedIn()
-			log.Warn().Int("userID", msgData.Userid).Msg("Sessão do usuário reiniciada")
+			isConnected = clientPointer[msgData.Userid].IsConnected()
+			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
+			log.Warn().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Sessão do usuário reiniciada")
+
+			if err := queue.Enqueue(string(updatedMessage), delivery.Priority, msgData.Userid); err != nil {
+				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to re-enqueue message")
+				sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reenfileirar mensagem")
+				delivery.Nack(false, false) // ✅ Só manda para DLQ se falhou ao reenfileirar
+			} else {
+				delivery.Ack(false) // ✅ Confirma a mensagem como processada se foi reenfileirada corretamente
+			}
 		} else {
-			msgData.RetryCount++
-			updatedMessage, err := json.Marshal(msgData)
 			if err != nil {
 				log.Error().Err(err).Str("id", msgData.Id).Msg("Failed to marshal updated message")
 				delivery.Nack(false, true)

@@ -1456,6 +1456,10 @@ func (s *server) UpdateUserImage() http.HandlerFunc {
 		response := map[string]interface{}{"message": "Imagem atualizada com sucesso"}
 		responseJson, _ := json.Marshal(response)
 
+		//atualiza a imagem em r.Context().Value("userinfo").(Values).Get("ImageBase64")
+		v := updateUserInfo(r.Context().Value("userinfo"), "ImageBase64", requestData.ImageBase64)
+		userinfocache.Set(token, v, cache.NoExpiration)
+
 		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }

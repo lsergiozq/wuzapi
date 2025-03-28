@@ -45,14 +45,18 @@ func (s *server) routes() {
 	c = c.Append(hlog.NewHandler(log))
 
 	c = c.Append(hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
-		hlog.FromRequest(r).Info().
-			Str("method", r.Method).
-			Stringer("url", r.URL).
-			Int("status", status).
-			Int("size", size).
-			Dur("duration", duration).
-			Str("userid", r.Context().Value("userinfo").(Values).Get("Id")).
-			Msg("Got API Request")
+		// log desativado
+		if (status != 200 && status != 201) || size == 0 {
+			hlog.FromRequest(r).Error().
+				Str("method", r.Method).
+				Stringer("url", r.URL).
+				Int("status", status).
+				Int("size", size).
+				Dur("duration", duration).
+				Str("userid", r.Context().Value("userinfo").(Values).Get("Id")).
+				Msg("Got API Request")
+			return
+		}
 	}))
 	c = c.Append(hlog.RemoteAddrHandler("ip"))
 	c = c.Append(hlog.UserAgentHandler("user_agent"))

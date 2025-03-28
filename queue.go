@@ -605,8 +605,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	isConnected := clientPointer[msgData.Userid].IsConnected()
 	isLoggedIn := clientPointer[msgData.Userid].IsLoggedIn()
 
-	log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário")
-
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Str("id", msgData.Id).Msgf("Erro ao enviar mensagem: %v", r)
@@ -625,7 +623,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			time.Sleep(5 * time.Second)
 			isConnected = clientPointer[msgData.Userid].IsConnected()
 			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
-			log.Info().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Verificando conexão do usuário - Tentativa " + fmt.Sprintf("%d", i+1))
 			if isConnected && isLoggedIn {
 				break
 			}
@@ -675,7 +672,6 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			thumbnailBytes = cachedThumbnail
 			fileLength = cachedLength
 			mimetype = cachedMime
-			log.Info().Str("id", msgData.Id).Msg("UploadResponse válido, reutilizando")
 		} else {
 			useImageCache = true
 
@@ -968,7 +964,7 @@ func cleanupUploadData() {
 	for userID, data := range uploadDataCache {
 		if !data.UploadResponseExpired.After(now) {
 			delete(uploadDataCache, userID)
-			log.Info().Int("userID", userID).Msg("Removed expired upload data from cache")
+			//log.Info().Int("userID", userID).Msg("Removed expired upload data from cache")
 		}
 	}
 }

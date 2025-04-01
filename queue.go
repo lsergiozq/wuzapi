@@ -17,7 +17,7 @@ import (
 	"github.com/streadway/amqp"
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
@@ -652,7 +652,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		return
 	}
 
-	var msgProto waProto.Message
+	var msgProto waE2E.Message
 
 	if msgData.SendImage {
 		var uploaded whatsmeow.UploadResponse
@@ -753,8 +753,8 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			}
 		}
 
-		msgProto = waProto.Message{
-			ImageMessage: &waProto.ImageMessage{
+		msgProto = waE2E.Message{
+			ImageMessage: &waE2E.ImageMessage{
 				Caption:       proto.String(msgData.Text),
 				URL:           proto.String(uploaded.URL),
 				DirectPath:    proto.String(uploaded.DirectPath),
@@ -768,18 +768,15 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 		}
 
 	} else {
-		msgProto = waProto.Message{
-			ExtendedTextMessage: &waProto.ExtendedTextMessage{
+		msgProto = waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 				Text: proto.String(msgData.Text),
 			},
 		}
 	}
 
-	resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id})
+	resp, err := clientPointer[msgData.Userid].SendMessage(context.Background(), recipient, &msgProto, whatsmeow.SendRequestExtra{ID: msgData.Id, MediaHandle: "json:'handle'"})
 
-	// Define status e detalhes do envio
-	status := "success"
-	details := "Mensagem enviada com sucesso"
 	timestamp := int64(0)
 
 	if err != nil {
@@ -793,20 +790,19 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 			clientPointer[msgData.Userid].Disconnect()
 			//tempo para reconectar de 10 segundos
-			time.Sleep(5 * time.Second)
+			time.Sleep(4 * time.Second)
 			isConnected = clientPointer[msgData.Userid].IsConnected()
+			time.Sleep(2 * time.Second)
 			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
+			time.Sleep(1 * time.Second)
 			log.Warn().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Sessão do usuário reiniciada")
 
-			reEnqueueMessage(s, msgData, queue, delivery)
-
-		} else {
-			reEnqueueMessage(s, msgData, queue, delivery)
 		}
+		reEnqueueMessage(s, msgData, queue, delivery)
 	} else {
 		timestamp = resp.Timestamp.Unix()
 		delivery.Ack(false) //Processada com sucesso
-		sendWebhookNotification(s, msgData, timestamp, status, details)
+		sendWebhookNotification(s, msgData, timestamp, "success", "Mensagem enviada com sucesso")
 	}
 }
 

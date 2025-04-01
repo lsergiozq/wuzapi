@@ -22,15 +22,12 @@ import (
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/store"
-	_ "modernc.org/sqlite"
-
-	//	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	//"google.golang.org/protobuf/proto"
+	_ "modernc.org/sqlite"
 )
 
 // var wlog waLog.Logger
@@ -229,7 +226,7 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 	//store.CompanionProps.Os = proto.String("Mac OS")
 
 	osName := "OW Cloud Zap 2.0"
-	store.DeviceProps.PlatformType = waProto.DeviceProps_UNKNOWN.Enum()
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 	store.DeviceProps.Os = &osName
 
 	clientLog := waLog.Stdout("Client", *waDebug, *colorOutput)

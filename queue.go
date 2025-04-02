@@ -613,7 +613,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 	}()
 
 	if !isConnected || !isLoggedIn {
-		log.Warn().Int("userID", msgData.Userid).Msg("Reconnecting user session")
+		log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
 		clientPointer[msgData.Userid].Disconnect()
 		time.Sleep(2 * time.Second)
 
@@ -630,7 +630,7 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 
 		// Verifica se o usuário está conectado e logado
 		if !isConnected || !isLoggedIn {
-			log.Error().Int("userID", msgData.Userid).Msg("Failed to reconnect user session")
+			log.Error().Int("userID", msgData.Userid).Msg("Falha ao reconectar usuário")
 			sendWebhookNotification(s, msgData, time.Now().Unix(), "error", "Falha ao reconectar usuário")
 			delivery.Ack(false)
 			return
@@ -788,13 +788,17 @@ func ProcessMessage(delivery amqp.Delivery, s *server, msgData MessageData, queu
 			strings.Contains(err.Error(), "479") ||
 			strings.Contains(err.Error(), "500") {
 			log.Warn().Int("userID", msgData.Userid).Msg("Reiniciando sessão do usuário")
+			//faz um loop para tentar 3 vezes reconectar o usuário
 			clientPointer[msgData.Userid].Disconnect()
-			//tempo para reconectar de 10 segundos
-			time.Sleep(4 * time.Second)
-			isConnected = clientPointer[msgData.Userid].IsConnected()
-			time.Sleep(2 * time.Second)
-			isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
-			time.Sleep(1 * time.Second)
+			for i := 0; i < 3; i++ {
+				clientPointer[msgData.Userid].Connect()
+				time.Sleep(5 * time.Second)
+				isConnected = clientPointer[msgData.Userid].IsConnected()
+				isLoggedIn = clientPointer[msgData.Userid].IsLoggedIn()
+				if isConnected && isLoggedIn {
+					break
+				}
+			}
 			log.Warn().Int("userID", msgData.Userid).Bool("isConnected", isConnected).Bool("isLoggedIn", isLoggedIn).Msg("Sessão do usuário reiniciada")
 
 		}
